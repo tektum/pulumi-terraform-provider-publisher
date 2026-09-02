@@ -44,7 +44,7 @@ jobs:
   publish:
     permissions:
       contents: write # publish-go-sdk-action pushes the Go SDK tag
-    uses: omercnet/pulumi-terraform-provider-publisher/.github/workflows/publish-terraform-provider-sdks.yml@58775a1564ed73632891434ebf8c4f71e080ea19 # v1
+    uses: omercnet/pulumi-terraform-provider-publisher/.github/workflows/publish-terraform-provider-sdks.yml@17fc2d900ce87f3463b0f7c89e0c98d8f8cb6d74 # v1
     with:
       mode: registry
       terraform-provider: descope/descope
