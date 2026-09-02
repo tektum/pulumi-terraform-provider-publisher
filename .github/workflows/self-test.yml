@@ -22,7 +22,7 @@ jobs:
     name: Registry mode (dry run)
     uses: ./.github/workflows/publish-terraform-provider-sdks.yml
     permissions:
-      contents: read
+      contents: write # reusable publish-go job's maximum; publish=false skips that job
     with:
       mode: registry
       terraform-provider: descope/descope
