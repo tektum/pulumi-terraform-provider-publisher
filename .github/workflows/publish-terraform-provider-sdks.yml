@@ -279,14 +279,14 @@ jobs:
       - name: Resolve publisher revision
         id: publisher
         env:
-          JOB_WORKFLOW_SHA: ${{ github.job_workflow_sha }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
-          if [[ -z "${JOB_WORKFLOW_SHA}" ]]; then
-            echo "::error title=Cannot resolve publisher revision::github.job_workflow_sha is empty. Call this workflow by tag or SHA (uses: ${PUBLISHER_REPOSITORY}/.github/workflows/publish-terraform-provider-sdks.yml@<sha>)." >&2
+          if [[ -z "${WORKFLOW_SHA}" ]]; then
+            echo "::error title=Cannot resolve publisher revision::github.workflow_sha is empty. Call this workflow by tag or SHA (uses: ${PUBLISHER_REPOSITORY}/.github/workflows/publish-terraform-provider-sdks.yml@<sha>)." >&2
             exit 1
           fi
-          echo "ref=${JOB_WORKFLOW_SHA}" >> "$GITHUB_OUTPUT"
+          echo "ref=${WORKFLOW_SHA}" >> "$GITHUB_OUTPUT"
 
       - name: Checkout publisher scripts
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

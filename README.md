@@ -76,9 +76,9 @@ Complete, runnable callers:
 - [`examples/local-binary-mode.yml`](examples/local-binary-mode.yml) - generation
   from a provider binary built by the checked-out commit.
 
-Pin `uses:` to a commit SHA. `job_workflow_sha` is how the workflow finds its own
-helper scripts, so calling it by a mutable branch name also means the scripts can
-change under you.
+Pin `uses:` to a commit SHA. `github.workflow_sha` is how the called workflow
+checks out the matching revision of its helper scripts, so a mutable caller ref
+would also make those scripts mutable.
 
 ## Two generation modes
 
@@ -311,10 +311,9 @@ no YAML artifact is produced.
   impossible.
 
 `actionlint`, `shellcheck` and `zizmor --persona=pedantic --min-severity=low` run
-in CI and are treated as blocking. The only suppressions are one narrowly scoped
-`actionlint` ignore for a stale context schema (`job_workflow_sha`) and one
+in CI and are treated as blocking. The only suppression is one narrowly scoped
 `shellcheck` disable for JavaScript template literals inside a single-quoted node
-program. Both are annotated in place.
+program, annotated in place.
 
 `pulumi-package-publisher` also exposes an `assertPrerelease` input. It is not
 used: its implementation is `if [[ ... ]] then`, which is a bash syntax error, so
