@@ -1,0 +1,85 @@
+# Example caller workflow: registry-backed generation.
+#
+# Copy into .github/workflows/ of the repository that owns the published SDKs.
+# The Terraform provider is resolved from the registry at an exact pinned version,
+# so nothing is built from source and no provider binary is needed.
+#
+# Trigger: pushing a tag such as v0.3.16 publishes the matching provider version.
+
+name: Publish Pulumi SDKs
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Terraform provider version to publish, e.g. 0.3.16
+        required: true
+        type: string
+      publish:
+        description: Publish to the package registries
+        required: false
+        type: boolean
+        default: false
+
+permissions: {}
+
+concurrency:
+  group: publish-pulumi-sdks-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  resolve-version:
+    runs-on: ubuntu-latest
+    permissions: {}
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Resolve version
+        id: version
+        env:
+          MANUAL_VERSION: ${{ inputs.version }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${MANUAL_VERSION}" ]]; then
+            version="${MANUAL_VERSION}"
+          else
+            version="${REF_NAME#v}"
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+  publish:
+    needs: resolve-version
+    permissions:
+      contents: write  # publish-go-sdk-action pushes the Go SDK tag
+    uses: omercnet/pulumi-terraform-provider-publisher/.github/workflows/publish-terraform-provider-sdks.yml@v1
+    with:
+      mode: registry
+      terraform-provider: descope/descope
+      terraform-provider-version: ${{ needs.resolve-version.outputs.version }}
+      languages: nodejs,python,go,dotnet,java,yaml
+      publish: ${{ inputs.publish || github.ref_type == 'tag' }}
+
+      # Package coordinates. Omit any of these to accept the generated default
+      # ("@pulumi/<package>", "pulumi_<package>", "Pulumi.<Package>").
+      nodejs-package-name: "@descope/pulumi-descope"
+      python-package-name: descope_pulumi_descope
+      dotnet-root-namespace: Descope.Pulumi
+      java-base-package: com.descope.pulumi
+
+      # The Go module is published into this repository at sdk/go, producing the
+      # module path github.com/descope/pulumi-descope/sdk/go and the tag
+      # sdk/go/v<version>.
+      go-sdk-repository: descope/pulumi-descope
+      go-sdk-path: sdk/go
+      go-sdk-base-ref: main
+    secrets:
+      npm-token: ${{ secrets.NPM_TOKEN }}
+      pypi-password: ${{ secrets.PYPI_API_TOKEN }}
+      nuget-publish-key: ${{ secrets.NUGET_PUBLISH_KEY }}
+      maven-username: ${{ secrets.SONATYPE_USERNAME }}
+      maven-password: ${{ secrets.SONATYPE_PASSWORD }}
+      maven-signing-key: ${{ secrets.PGP_PRIVATE_KEY }}
+      maven-signing-password: ${{ secrets.PGP_PASSPHRASE }}

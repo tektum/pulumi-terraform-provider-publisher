@@ -1,0 +1,9 @@
+# actionlint's built-in `github` context schema does not yet include
+# `job_workflow_sha`, which GitHub documents and populates for jobs that run a
+# reusable workflow. It is the only reliable way for a called workflow to check out
+# the revision of itself, so the property is used and this single false positive is
+# ignored. Scoped to the one file and the one message.
+paths:
+  .github/workflows/publish-terraform-provider-sdks.yml:
+    ignore:
+      - 'property "job_workflow_sha" is not defined'

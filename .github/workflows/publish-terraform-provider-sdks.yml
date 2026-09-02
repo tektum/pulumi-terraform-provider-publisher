@@ -1,0 +1,769 @@
+name: Publish Terraform provider SDKs
+
+# Reusable workflow: generates Pulumi SDKs for a bridged Terraform provider with
+# `pulumi package add`/`gen-sdk`, then publishes them to npm, PyPI, NuGet, Maven
+# Central and a Go module repository.
+#
+# The YAML runtime is generated and validated only: it has no publishable artifact.
+#
+# See README.md for the full input contract and for the trust boundary that applies
+# to `build-command`.
+
+on:
+  workflow_call:
+    inputs:
+      mode:
+        description: >-
+          "registry" resolves the Terraform provider from a registry at an exact
+          pinned version. "local" extracts the schema from a provider binary in the
+          checked-out caller repository.
+        required: true
+        type: string
+      terraform-provider:
+        description: >-
+          mode=registry only. Terraform registry address, e.g. "descope/descope" or
+          "registry.opentofu.org/descope/descope".
+        required: false
+        type: string
+        default: ""
+      terraform-provider-version:
+        description: >-
+          mode=registry only. Exact semver version of the Terraform provider.
+          Ranges and "latest" are rejected so releases are reproducible.
+        required: false
+        type: string
+        default: ""
+      provider-binary-path:
+        description: >-
+          mode=local only. Path, relative to the caller checkout, of the Terraform
+          provider binary (or the directory containing it).
+        required: false
+        type: string
+        default: ""
+      build-command:
+        description: >-
+          mode=local only. Shell command executed in the caller checkout before
+          schema extraction, e.g. "make build". TRUST BOUNDARY: this string is
+          executed. See README.md.
+        required: false
+        type: string
+        default: ""
+      sdk-version:
+        description: >-
+          Semver version to stamp on every generated SDK. Defaults to
+          terraform-provider-version in registry mode; required in local mode.
+        required: false
+        type: string
+        default: ""
+      languages:
+        description: >-
+          Comma separated subset of nodejs,python,go,dotnet,java,yaml, or "all".
+        required: false
+        type: string
+        default: "all"
+      publish:
+        description: >-
+          Publish the built SDKs. false performs generation, build and validation
+          only. Publication is additionally suppressed on pull_request events.
+        required: false
+        type: boolean
+        default: false
+      provider-name:
+        description: >-
+          Override the generated Pulumi package name, for providers whose Terraform
+          name collides with an existing Pulumi package.
+        required: false
+        type: string
+        default: ""
+      nodejs-package-name:
+        description: 'npm package name, e.g. "@acme/pulumi-acme". Default: "@pulumi/<package>".'
+        required: false
+        type: string
+        default: ""
+      python-package-name:
+        description: 'PyPI distribution name. Default: "pulumi_<package>".'
+        required: false
+        type: string
+        default: ""
+      go-module-path:
+        description: >-
+          Go module path. Defaults to
+          "github.com/<go-sdk-repository>/<go-sdk-path>", which is the only value
+          that yields importable code.
+        required: false
+        type: string
+        default: ""
+      go-sdk-repository:
+        description: >-
+          Repository hosting the published Go module, as "<owner>/<repo>". Must be
+          writable by the caller's GITHUB_TOKEN. Defaults to the calling repository.
+        required: false
+        type: string
+        default: ""
+      go-sdk-path:
+        description: Sub-path inside go-sdk-repository that holds the Go module.
+        required: false
+        type: string
+        default: "sdk/go"
+      go-sdk-base-ref:
+        description: Branch, tag or SHA used as the parent commit for the Go SDK push.
+        required: false
+        type: string
+        default: "main"
+      go-sdk-skip-go-get:
+        description: >-
+          Skip the post-push "go get" that warms proxy.golang.org. Set true for
+          private repositories.
+        required: false
+        type: boolean
+        default: false
+      dotnet-root-namespace:
+        description: '.NET root namespace, e.g. "Acme.Pulumi". Default: "Pulumi".'
+        required: false
+        type: string
+        default: ""
+      java-base-package:
+        description: 'Java base package and Maven groupId, e.g. "com.acme.pulumi".'
+        required: false
+        type: string
+        default: ""
+      maven-publish-repo-url:
+        description: >-
+          Maven repository URL. Leave empty to use the generated build.gradle
+          default (Sonatype Central snapshots).
+        required: false
+        type: string
+        default: ""
+      maven-staging-url:
+        description: >-
+          Sonatype staging API URL. Leave empty to use the generated build.gradle
+          default.
+        required: false
+        type: string
+        default: ""
+      assert-prerelease:
+        description: >-
+          Fail publication unless sdk-version is a prerelease. Use on non-release
+          branches to make an accidental stable publish impossible.
+        required: false
+        type: boolean
+        default: false
+      ref:
+        description: Caller ref to check out. Defaults to the triggering SHA.
+        required: false
+        type: string
+        default: ""
+      runs-on:
+        description: Runner label for every job.
+        required: false
+        type: string
+        default: ubuntu-latest
+      pulumi-version:
+        description: Pulumi CLI version constraint.
+        required: false
+        type: string
+        default: "^3"
+      pulumictl-version:
+        description: >-
+          pulumictl version. pulumi-package-publisher shells out to pulumictl to
+          validate the npm package version.
+        required: false
+        type: string
+        default: v0.0.50
+      node-version:
+        required: false
+        type: string
+        default: "20.x"
+      python-version:
+        required: false
+        type: string
+        default: "3.11"
+      go-version:
+        required: false
+        type: string
+        default: "1.25"
+      dotnet-version:
+        required: false
+        type: string
+        default: "8.0.x"
+      java-version:
+        required: false
+        type: string
+        default: "11"
+    secrets:
+      npm-token:
+        description: npm automation token. Required to publish the nodejs SDK.
+        required: false
+      pypi-username:
+        description: 'PyPI username. Defaults to "__token__" when pypi-password is an API token.'
+        required: false
+      pypi-password:
+        description: PyPI password or API token. Required to publish the python SDK.
+        required: false
+      nuget-publish-key:
+        description: nuget.org API key. Required to publish the dotnet SDK.
+        required: false
+      maven-username:
+        description: Sonatype Central username. Required to publish the java SDK.
+        required: false
+      maven-password:
+        description: Sonatype Central password. Required to publish the java SDK.
+        required: false
+      maven-signing-key:
+        description: ASCII-armored PGP private key used to sign Maven artifacts.
+        required: false
+      maven-signing-password:
+        description: Passphrase for maven-signing-key.
+        required: false
+    outputs:
+      version:
+        description: Normalized semver version stamped on every SDK.
+        value: ${{ jobs.validate.outputs.version }}
+      package-name:
+        description: Generated Pulumi package name.
+        value: ${{ jobs.schema.outputs.package-name }}
+      published:
+        description: Comma separated languages that were published by this run.
+        value: ${{ jobs.publish.outputs.published }}
+
+# Least privilege: every job opts in to exactly what it needs.
+permissions: {}
+
+env:
+  PUBLISHER_REPOSITORY: omercnet/pulumi-terraform-provider-publisher
+
+jobs:
+  validate:
+    name: Validate inputs
+    runs-on: ${{ inputs.runs-on }}
+    permissions:
+      contents: read
+    outputs:
+      mode: ${{ steps.validate.outputs.mode }}
+      version: ${{ steps.validate.outputs.version }}
+      languages: ${{ steps.validate.outputs.languages }}
+      build-languages-json: ${{ steps.validate.outputs.build-languages-json }}
+      publisher-sdks: ${{ steps.validate.outputs.publisher-sdks }}
+      publish-go: ${{ steps.validate.outputs.publish-go }}
+      validate-yaml: ${{ steps.validate.outputs.validate-yaml }}
+      publish: ${{ steps.validate.outputs.publish }}
+      go-module-path: ${{ steps.validate.outputs.go-module-path }}
+      go-sdk-repository: ${{ steps.validate.outputs.go-sdk-repository }}
+      go-sdk-path: ${{ steps.validate.outputs.go-sdk-path }}
+      go-sdk-base-ref: ${{ steps.validate.outputs.go-sdk-base-ref }}
+      nodejs-package-name: ${{ steps.validate.outputs.nodejs-package-name }}
+      python-package-name: ${{ steps.validate.outputs.python-package-name }}
+      dotnet-root-namespace: ${{ steps.validate.outputs.dotnet-root-namespace }}
+      java-base-package: ${{ steps.validate.outputs.java-base-package }}
+      publisher-ref: ${{ steps.publisher.outputs.ref }}
+    steps:
+      - name: Resolve publisher revision
+        id: publisher
+        env:
+          JOB_WORKFLOW_SHA: ${{ github.job_workflow_sha }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${JOB_WORKFLOW_SHA}" ]]; then
+            echo "::error title=Cannot resolve publisher revision::github.job_workflow_sha is empty. Call this workflow by tag or SHA (uses: ${PUBLISHER_REPOSITORY}/.github/workflows/publish-terraform-provider-sdks.yml@<sha>)." >&2
+            exit 1
+          fi
+          echo "ref=${JOB_WORKFLOW_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout publisher scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ env.PUBLISHER_REPOSITORY }}
+          ref: ${{ steps.publisher.outputs.ref }}
+          persist-credentials: false
+
+      - name: Validate and normalize inputs
+        id: validate
+        env:
+          MODE: ${{ inputs.mode }}
+          TF_PROVIDER: ${{ inputs.terraform-provider }}
+          TF_PROVIDER_VERSION: ${{ inputs.terraform-provider-version }}
+          PROVIDER_BINARY_PATH: ${{ inputs.provider-binary-path }}
+          BUILD_COMMAND: ${{ inputs.build-command }}
+          PROVIDER_NAME: ${{ inputs.provider-name }}
+          SDK_VERSION: ${{ inputs.sdk-version || inputs.terraform-provider-version }}
+          LANGUAGES: ${{ inputs.languages }}
+          PUBLISH: ${{ inputs.publish }}
+          NODEJS_PACKAGE_NAME: ${{ inputs.nodejs-package-name }}
+          PYTHON_PACKAGE_NAME: ${{ inputs.python-package-name }}
+          GO_MODULE_PATH: ${{ inputs.go-module-path }}
+          GO_SDK_REPOSITORY: ${{ inputs.go-sdk-repository || github.repository }}
+          GO_SDK_PATH: ${{ inputs.go-sdk-path }}
+          GO_SDK_BASE_REF: ${{ inputs.go-sdk-base-ref }}
+          DOTNET_ROOT_NAMESPACE: ${{ inputs.dotnet-root-namespace }}
+          JAVA_BASE_PACKAGE: ${{ inputs.java-base-package }}
+        run: python3 scripts/validate_inputs.py
+
+      - name: Assert prerelease
+        if: inputs.assert-prerelease
+        env:
+          VERSION: ${{ steps.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${VERSION}" =~ - ]]; then
+            echo "::error title=Refusing to publish a stable version::assert-prerelease is set but sdk-version ${VERSION} has no prerelease suffix." >&2
+            exit 1
+          fi
+          echo "${VERSION} is a prerelease"
+
+  schema:
+    name: Extract schema
+    needs: validate
+    runs-on: ${{ inputs.runs-on }}
+    permissions:
+      contents: read
+    outputs:
+      package-name: ${{ steps.coordinates.outputs.package-name }}
+    steps:
+      - name: Checkout caller repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ inputs.ref || github.sha }}
+          path: caller
+          persist-credentials: false
+
+      - name: Checkout publisher scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ env.PUBLISHER_REPOSITORY }}
+          ref: ${{ needs.validate.outputs.publisher-ref }}
+          path: publisher
+          persist-credentials: false
+
+      - name: Install Pulumi CLI
+        uses: pulumi/actions@8e5e406f4007fca908480587cb9893c07090f58d # v7.0.0
+        with:
+          pulumi-version: ${{ inputs.pulumi-version }}
+
+      # Toolchains the caller's build command may need. Kept unconditional so a
+      # local-mode build command has a predictable environment.
+      - name: Set up Go
+        if: needs.validate.outputs.mode == 'local'
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ inputs.go-version }}
+          cache: false
+
+      - name: Run caller build command
+        if: needs.validate.outputs.mode == 'local' && inputs.build-command != ''
+        working-directory: caller
+        env:
+          # The command is caller-controlled by design. It is passed through the
+          # environment and executed with an explicit interpreter so that this
+          # workflow never splices it into a larger shell program.
+          CALLER_BUILD_COMMAND: ${{ inputs.build-command }}
+        run: |
+          set -euo pipefail
+          echo "::group::caller build command"
+          printf '%s\n' "${CALLER_BUILD_COMMAND}"
+          echo "::endgroup::"
+          bash -euo pipefail -c "${CALLER_BUILD_COMMAND}"
+
+      - name: Extract package schema
+        id: extract
+        working-directory: caller
+        env:
+          MODE: ${{ needs.validate.outputs.mode }}
+          TF_PROVIDER: ${{ inputs.terraform-provider }}
+          TF_PROVIDER_VERSION: ${{ inputs.terraform-provider-version }}
+          PROVIDER_BINARY_PATH: ${{ inputs.provider-binary-path }}
+          PROVIDER_NAME: ${{ inputs.provider-name }}
+        run: |
+          set -euo pipefail
+          # Build the parameter list as an array; nothing is concatenated into a
+          # shell string, so provider addresses and paths cannot inject arguments.
+          args=()
+          if [[ "${MODE}" == "registry" ]]; then
+            args+=("${TF_PROVIDER}" "${TF_PROVIDER_VERSION}")
+          else
+            target="${PROVIDER_BINARY_PATH}"
+            if [[ ! -e "${target}" ]]; then
+              echo "::error title=Provider binary not found::provider-binary-path '${target}' does not exist in the caller checkout. Did build-command run?" >&2
+              exit 1
+            fi
+            # The terraform-provider plugin distinguishes a local path from a
+            # registry address by a leading "./" or "/".
+            [[ "${target}" == ./* || "${target}" == /* ]] || target="./${target}"
+            args+=("${target}")
+          fi
+          if [[ -n "${PROVIDER_NAME}" ]]; then
+            args+=(--provider-name "${PROVIDER_NAME}")
+          fi
+          echo "::group::pulumi package get-schema terraform-provider -- ${args[*]}"
+          pulumi package get-schema terraform-provider -- "${args[@]}" > "${RUNNER_TEMP}/schema.json"
+          echo "::endgroup::"
+          wc -c "${RUNNER_TEMP}/schema.json"
+
+      - name: Pin version and package coordinates
+        id: coordinates
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+          NODEJS_PACKAGE_NAME: ${{ needs.validate.outputs.nodejs-package-name }}
+          PYTHON_PACKAGE_NAME: ${{ needs.validate.outputs.python-package-name }}
+          GO_MODULE_PATH: ${{ needs.validate.outputs.go-module-path }}
+          DOTNET_ROOT_NAMESPACE: ${{ needs.validate.outputs.dotnet-root-namespace }}
+          JAVA_BASE_PACKAGE: ${{ needs.validate.outputs.java-base-package }}
+        run: |
+          set -euo pipefail
+          python3 publisher/scripts/patch_schema.py \
+            --schema "${RUNNER_TEMP}/schema.json" \
+            --out "${RUNNER_TEMP}/schema-patched.json" \
+            --coordinates-out "${RUNNER_TEMP}/coordinates.json" \
+            --version "${VERSION}" \
+            --nodejs-package-name "${NODEJS_PACKAGE_NAME}" \
+            --python-package-name "${PYTHON_PACKAGE_NAME}" \
+            --go-module-path "${GO_MODULE_PATH}" \
+            --dotnet-root-namespace "${DOTNET_ROOT_NAMESPACE}" \
+            --java-base-package "${JAVA_BASE_PACKAGE}"
+
+      - name: Upload schema
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: package-schema
+          path: |
+            ${{ runner.temp }}/schema-patched.json
+            ${{ runner.temp }}/coordinates.json
+          if-no-files-found: error
+          retention-days: 1
+
+  build:
+    name: Build ${{ matrix.language }} SDK
+    needs: [validate, schema]
+    if: needs.validate.outputs.build-languages-json != '[]'
+    runs-on: ${{ inputs.runs-on }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        language: ${{ fromJSON(needs.validate.outputs.build-languages-json) }}
+    steps:
+      - name: Checkout publisher scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ env.PUBLISHER_REPOSITORY }}
+          ref: ${{ needs.validate.outputs.publisher-ref }}
+          persist-credentials: false
+
+      - name: Download schema
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: package-schema
+          path: schema
+
+      - name: Install Pulumi CLI
+        uses: pulumi/actions@8e5e406f4007fca908480587cb9893c07090f58d # v7.0.0
+        with:
+          pulumi-version: ${{ inputs.pulumi-version }}
+
+      - name: Set up Node.js
+        if: matrix.language == 'nodejs'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Set up Python
+        if: matrix.language == 'python'
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      - name: Set up Go
+        if: matrix.language == 'go'
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ inputs.go-version }}
+          cache: false
+
+      - name: Set up .NET
+        if: matrix.language == 'dotnet'
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: ${{ inputs.dotnet-version }}
+
+      - name: Generate ${{ matrix.language }} SDK
+        env:
+          LANGUAGE: ${{ matrix.language }}
+        run: |
+          set -euo pipefail
+          pulumi package gen-sdk schema/schema-patched.json --language "${LANGUAGE}" --out ./sdk
+
+      - name: Build and verify ${{ matrix.language }} SDK
+        env:
+          LANGUAGE: ${{ matrix.language }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: ./scripts/build_sdk.sh "${LANGUAGE}" ./sdk "${VERSION}"
+
+      - name: Upload ${{ matrix.language }} SDK artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          # pulumi/pulumi-package-publisher downloads exactly this artifact name and
+          # untars the <language>.tar.gz it contains.
+          name: ${{ matrix.language }}-sdk.tar.gz
+          path: sdk/${{ matrix.language }}.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
+  validate-yaml:
+    name: Validate YAML package
+    needs: [validate, schema]
+    if: needs.validate.outputs.validate-yaml == 'true'
+    runs-on: ${{ inputs.runs-on }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout publisher scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ env.PUBLISHER_REPOSITORY }}
+          ref: ${{ needs.validate.outputs.publisher-ref }}
+          persist-credentials: false
+
+      - name: Install Pulumi CLI
+        uses: pulumi/actions@8e5e406f4007fca908480587cb9893c07090f58d # v7.0.0
+        with:
+          pulumi-version: ${{ inputs.pulumi-version }}
+
+      - name: Checkout caller repository
+        if: needs.validate.outputs.mode == 'local'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ inputs.ref || github.sha }}
+          path: caller
+          persist-credentials: false
+
+      - name: Set up Go
+        if: needs.validate.outputs.mode == 'local'
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ inputs.go-version }}
+          cache: false
+
+      - name: Run caller build command
+        if: needs.validate.outputs.mode == 'local' && inputs.build-command != ''
+        working-directory: caller
+        env:
+          CALLER_BUILD_COMMAND: ${{ inputs.build-command }}
+        run: bash -euo pipefail -c "${CALLER_BUILD_COMMAND}"
+
+      - name: Add package to a YAML project
+        id: add
+        env:
+          MODE: ${{ needs.validate.outputs.mode }}
+          TF_PROVIDER: ${{ inputs.terraform-provider }}
+          TF_PROVIDER_VERSION: ${{ inputs.terraform-provider-version }}
+          PROVIDER_BINARY_PATH: ${{ inputs.provider-binary-path }}
+          PROVIDER_NAME: ${{ inputs.provider-name }}
+        run: |
+          set -euo pipefail
+          project="${RUNNER_TEMP}/yaml-project"
+          mkdir -p "${project}"
+          cat >"${project}/Pulumi.yaml" <<'YAML'
+          name: pulumi-sdk-yaml-validation
+          runtime: yaml
+          description: Ephemeral project used to validate YAML package resolution.
+          YAML
+          args=()
+          if [[ "${MODE}" == "registry" ]]; then
+            args+=("${TF_PROVIDER}" "${TF_PROVIDER_VERSION}")
+          else
+            target="caller/${PROVIDER_BINARY_PATH}"
+            target="$(realpath "${target}")"
+            args+=("${target}")
+          fi
+          if [[ -n "${PROVIDER_NAME}" ]]; then
+            args+=(--provider-name "${PROVIDER_NAME}")
+          fi
+          ( cd "${project}" && pulumi package add terraform-provider "${args[@]}" )
+          echo "::group::Pulumi.yaml"
+          cat "${project}/Pulumi.yaml"
+          echo "::endgroup::"
+          echo "project=${project}" >> "$GITHUB_OUTPUT"
+
+      - name: Validate generated YAML package
+        env:
+          PROJECT: ${{ steps.add.outputs.project }}
+          PACKAGE_NAME: ${{ needs.schema.outputs.package-name }}
+          MODE: ${{ needs.validate.outputs.mode }}
+          TF_PROVIDER: ${{ inputs.terraform-provider }}
+          TF_PROVIDER_VERSION: ${{ inputs.terraform-provider-version }}
+        run: |
+          set -euo pipefail
+          # The descriptor file name carries the parameterized package version, so
+          # validate_yaml_package.py discovers it instead of guessing.
+          args=(
+            --project-dir "${PROJECT}"
+            --package-name "${PACKAGE_NAME}"
+          )
+          if [[ "${MODE}" == "registry" ]]; then
+            args+=(
+              --expect-package-version "${TF_PROVIDER_VERSION}"
+              --expect-parameter "${TF_PROVIDER}"
+              --expect-parameter "${TF_PROVIDER_VERSION}"
+            )
+          fi
+          python3 scripts/validate_yaml_package.py "${args[@]}"
+
+  publish:
+    name: Publish SDKs
+    needs: [validate, schema, build]
+    if: >-
+      needs.validate.outputs.publish == 'true'
+      && needs.validate.outputs.publisher-sdks != ''
+      && github.event_name != 'pull_request'
+    runs-on: ${{ inputs.runs-on }}
+    permissions:
+      contents: read
+    outputs:
+      published: ${{ steps.pending.outputs.sdk }}
+    steps:
+      - name: Checkout publisher scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ env.PUBLISHER_REPOSITORY }}
+          ref: ${{ needs.validate.outputs.publisher-ref }}
+          persist-credentials: false
+
+      - name: Download schema
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: package-schema
+          path: schema
+
+      - name: Determine unpublished versions
+        id: pending
+        env:
+          CANDIDATES: ${{ needs.validate.outputs.publisher-sdks }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          python3 scripts/check_published.py \
+            --coordinates schema/coordinates.json \
+            --languages "${CANDIDATES}" \
+            --version "${VERSION}"
+
+      - name: Install Pulumi CLI
+        if: steps.pending.outputs.any == 'true'
+        uses: pulumi/actions@8e5e406f4007fca908480587cb9893c07090f58d # v7.0.0
+        with:
+          pulumi-version: ${{ inputs.pulumi-version }}
+
+      - name: Set up Go
+        if: steps.pending.outputs.any == 'true'
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ inputs.go-version }}
+          cache: false
+
+      - name: Install pulumictl
+        if: steps.pending.outputs.any == 'true'
+        env:
+          PULUMICTL_VERSION: ${{ inputs.pulumictl-version }}
+        run: |
+          set -euo pipefail
+          go install "github.com/pulumi/pulumictl/cmd/pulumictl@${PULUMICTL_VERSION}"
+          echo "${HOME}/go/bin" >> "$GITHUB_PATH"
+
+      - name: Set up Node.js
+        if: steps.pending.outputs.any == 'true'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ inputs.node-version }}
+          registry-url: https://registry.npmjs.org
+
+      - name: Set up Python
+        if: steps.pending.outputs.any == 'true'
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      - name: Set up .NET
+        if: steps.pending.outputs.any == 'true'
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: ${{ inputs.dotnet-version }}
+
+      - name: Set up Java
+        if: steps.pending.outputs.any == 'true'
+        uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v6.0.0
+        with:
+          distribution: temurin
+          java-version: ${{ inputs.java-version }}
+
+      - name: Publish SDKs
+        if: steps.pending.outputs.any == 'true'
+        uses: pulumi/pulumi-package-publisher@3ec1409d3e894142b9825c7859be8e57d362762a # v0.0.23
+        with:
+          sdk: ${{ steps.pending.outputs.sdk }}
+          version: ${{ needs.validate.outputs.version }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.npm-token }}
+          PYPI_USERNAME: ${{ secrets.pypi-username || '__token__' }}
+          PYPI_PASSWORD: ${{ secrets.pypi-password }}
+          NUGET_PUBLISH_KEY: ${{ secrets.nuget-publish-key }}
+          PUBLISH_REPO_USERNAME: ${{ secrets.maven-username }}
+          PUBLISH_REPO_PASSWORD: ${{ secrets.maven-password }}
+          SIGNING_KEY: ${{ secrets.maven-signing-key }}
+          SIGNING_PASSWORD: ${{ secrets.maven-signing-password }}
+          PUBLISH_REPO_URL: ${{ inputs.maven-publish-repo-url }}
+          PUBLISH_STAGING_URL: ${{ inputs.maven-staging-url }}
+
+      - name: Report skipped publications
+        env:
+          SKIPPED: ${{ steps.pending.outputs.skipped }}
+          PUBLISHED: ${{ steps.pending.outputs.sdk }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### SDK publication"
+            echo
+            echo "- published: \`${PUBLISHED:-none}\`"
+            echo "- already published, skipped: \`${SKIPPED:-none}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  publish-go:
+    name: Publish Go SDK
+    needs: [validate, build]
+    if: >-
+      needs.validate.outputs.publish == 'true'
+      && needs.validate.outputs.publish-go == 'true'
+      && github.event_name != 'pull_request'
+    runs-on: ${{ inputs.runs-on }}
+    permissions:
+      contents: write # publish-go-sdk-action pushes the Go SDK tag to go-sdk-repository
+    steps:
+      - name: Download Go SDK artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: go-sdk.tar.gz
+          path: go-artifact
+
+      - name: Unpack Go SDK
+        run: |
+          set -euo pipefail
+          mkdir -p sdk/go
+          tar -xzf go-artifact/go.tar.gz -C sdk/go
+          find sdk/go -maxdepth 2 -mindepth 1 -print
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ inputs.go-version }}
+          cache: false
+
+      - name: Publish Go SDK
+        uses: pulumi/publish-go-sdk-action@0a153fa3c54227a3c0f7c97a57033ecfe94ab3c2 # v1.2.0
+        with:
+          repository: ${{ needs.validate.outputs.go-sdk-repository }}
+          base-ref: ${{ needs.validate.outputs.go-sdk-base-ref }}
+          source: sdk/go
+          path: ${{ needs.validate.outputs.go-sdk-path }}
+          version: ${{ needs.validate.outputs.version }}
+          additive: "true"
+          skip-go-get: ${{ inputs.go-sdk-skip-go-get && 'true' || 'false' }}

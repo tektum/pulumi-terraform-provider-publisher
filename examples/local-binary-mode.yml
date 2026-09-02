@@ -1,0 +1,63 @@
+# Example caller workflow: exact checked-out-source generation.
+#
+# Copy into .github/workflows/ of the Terraform provider repository itself. The
+# schema is extracted from the provider binary that this commit builds, so the
+# published SDKs describe exactly the checked-out source rather than whatever the
+# registry happens to serve.
+#
+# `build-command` runs in the caller checkout. It is executed, so treat it as
+# first-party code: see the trust boundary section in the publisher README.
+
+name: Publish Pulumi SDKs from source
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: publish-pulumi-sdks-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    permissions:
+      contents: write  # publish-go-sdk-action pushes the Go SDK tag
+    uses: omercnet/pulumi-terraform-provider-publisher/.github/workflows/publish-terraform-provider-sdks.yml@v1
+    with:
+      mode: local
+
+      # Built by build-command, relative to the caller checkout.
+      provider-binary-path: bin/terraform-provider-descope
+      build-command: |
+        go build -o bin/terraform-provider-descope .
+
+      # Required in local mode: nothing in the source tree tells the publisher
+      # which SDK version to stamp.
+      sdk-version: ${{ github.ref_type == 'tag' && github.ref_name || '0.0.0-dev.1' }}
+
+      languages: nodejs,python,go,dotnet,java,yaml
+
+      # publish is additionally forced off on pull_request events.
+      publish: ${{ github.ref_type == 'tag' }}
+      # On non-tag runs, refuse to publish anything that is not a prerelease.
+      assert-prerelease: ${{ github.ref_type != 'tag' }}
+
+      nodejs-package-name: "@descope/pulumi-descope"
+      python-package-name: descope_pulumi_descope
+      dotnet-root-namespace: Descope.Pulumi
+      java-base-package: com.descope.pulumi
+
+      go-sdk-repository: descope/pulumi-descope
+      go-sdk-path: sdk/go
+    secrets:
+      npm-token: ${{ secrets.NPM_TOKEN }}
+      pypi-password: ${{ secrets.PYPI_API_TOKEN }}
+      nuget-publish-key: ${{ secrets.NUGET_PUBLISH_KEY }}
+      maven-username: ${{ secrets.SONATYPE_USERNAME }}
+      maven-password: ${{ secrets.SONATYPE_PASSWORD }}
+      maven-signing-key: ${{ secrets.PGP_PRIVATE_KEY }}
+      maven-signing-password: ${{ secrets.PGP_PASSPHRASE }}

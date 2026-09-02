@@ -1,0 +1,6 @@
+# Local smoke-test scratch
+/sdk/
+/schema*.json
+/coordinates.json
+__pycache__/
+*.pyc
