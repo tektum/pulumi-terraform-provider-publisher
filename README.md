@@ -44,7 +44,7 @@ jobs:
   publish:
     permissions:
       contents: write # publish-go-sdk-action pushes the Go SDK tag
-    uses: omercnet/pulumi-terraform-provider-publisher/.github/workflows/publish-terraform-provider-sdks.yml@<commit-sha>
+    uses: omercnet/pulumi-terraform-provider-publisher/.github/workflows/publish-terraform-provider-sdks.yml@26a5b83e44552da492f1bfce145d1b3d450bb1e0 # v1
     with:
       mode: registry
       terraform-provider: descope/descope
@@ -98,18 +98,31 @@ terraform-provider-version: 0.3.16
 ### `mode: local`
 
 Extracts the schema by executing a provider binary inside the caller checkout, so
-the SDKs describe exactly the checked-out source rather than whatever the registry
-serves.
+the SDK surface describes exactly the checked-out source rather than whatever the
+registry serves.
 
 ```yaml
 mode: local
 provider-binary-path: bin/terraform-provider-descope
 build-command: go build -o bin/terraform-provider-descope .
 sdk-version: 0.4.0    # required: nothing in the source tree implies a version
+
+# Required when publish=true: released provider consumers resolve at runtime.
+runtime-provider: descope/descope
+runtime-provider-version: 0.4.0
 ```
 
 `provider-binary-path` must be relative to the caller checkout and must not escape
 it. `sdk-version` is required, because a working tree carries no release version.
+
+A local extraction carries a parameter equivalent to
+`{"local":{"path":"./bin/terraform-provider-descope"}}`. Publishing that value
+would create an SDK that installs cleanly, then tries to execute a path that only
+existed on the build runner. Therefore `publish: true` in local mode also requires
+`runtime-provider` and an exact `runtime-provider-version`. The workflow asks
+Pulumi to extract the registry schema and grafts its real parameterization block
+onto the source-derived schema. It never guesses or hand-builds the opaque
+parameter. `publish: false` may omit these inputs for source-only validation.
 
 Supplying registry inputs in local mode (or the reverse) is a hard error rather
 than a silently ignored field.
@@ -145,6 +158,8 @@ interpolated into a shell program.
 | `terraform-provider-version` | string | `""` | Exact provider semver. `registry` mode only. |
 | `provider-binary-path` | string | `""` | Provider binary path in the caller checkout. `local` mode only. |
 | `build-command` | string | `""` | Command run before extraction. `local` mode only. See trust boundary. |
+| `runtime-provider` | string | `""` | Registry address consumers resolve. `local` mode; required to publish. |
+| `runtime-provider-version` | string | `""` | Exact released runtime provider version. `local` mode; required to publish. |
 | `sdk-version` | string | `""` | Version stamped on every SDK. Defaults to `terraform-provider-version`. |
 | `languages` | string | `all` | Subset of `nodejs,python,go,dotnet,java,yaml`, or `all`. |
 | `publish` | boolean | `false` | Publish. Forced off on `pull_request`. |
@@ -227,10 +242,13 @@ A bridged Terraform provider is a *parameterized* Pulumi package: the SDK carrie
 an opaque base64 parameter) that lets it resolve the real provider at runtime.
 Strip it and the package installs cleanly and then fails at `pulumi up`.
 
-The schema patcher never touches the `parameterization` block, refuses to run on a
-schema that lacks one, and `scripts/verify_layout.py` re-asserts its presence in
-every built SDK: `bin/package.json` for npm, `pulumi-plugin.json` for Python, Go
-and .NET, and the `genPulumiResources` task for Java.
+The schema patcher never edits parameterization fields piecemeal. Registry mode
+preserves the extracted block verbatim. Local publication replaces the complete
+local-path block with a complete block taken from a second, real registry schema
+extraction. It refuses schemas without parameterization metadata, and
+`scripts/verify_layout.py` re-asserts its presence in every built SDK:
+`bin/package.json` for npm, `pulumi-plugin.json` for Python, Go and .NET, and the
+`genPulumiResources` task for Java.
 
 ## Idempotency
 
@@ -242,8 +260,15 @@ than a failure:
   publisher's `sdk` list. `npm publish` is the reason this exists: unlike twine's
   `--skip-existing` and `dotnet nuget push --skip-duplicate`, it hard-fails on a
   duplicate version and takes the whole job with it.
-- A registry that cannot be reached is treated as "not published", so an outage
-  cannot silently skip a real publication.
+- Before publication, required credentials are checked per selected language so a
+  missing secret fails with its `workflow_call` name rather than a registry error.
+- After publication, `scripts/verify_published.py` polls every selected registry
+  until the immutable version is readable. This is essential for Java because the
+  upstream publisher marks its Maven step `continue-on-error`; composite-action
+  success alone is not proof that Maven Central accepted the release.
+- A registry that cannot be reached is treated as "not published" before a release,
+  so an outage cannot silently skip a real publication; after publication it is
+  retried and eventually fails the job.
 - `pulumi/publish-go-sdk-action` already checks whether the tag exists.
 
 ## npm packaging check
@@ -303,6 +328,7 @@ the check is performed here instead.
 .github/workflows/self-test.yml                         real workflow_call dry run
 scripts/validate_inputs.py                              input validation and normalization
 scripts/patch_schema.py                                 version and coordinate pinning
+scripts/verify_published.py                             post-publish registry read-back
 scripts/build_sdk.sh                                    per-language build into publisher layout
 scripts/verify_layout.py                                publisher layout and parameterization asserts
 scripts/verify_npm_install.sh                            npm pack plus clean-room install
@@ -319,8 +345,11 @@ examples/                                               runnable caller workflow
 python3 -m unittest discover -s tests -p 'test_*.py' -v
 
 # End-to-end: generate, build and validate against a real provider.
-# Needs network access; needs no publishing credentials.
 tests/smoke_test.sh descope/descope 0.3.16
+
+# Builds a real Terraform provider from source, extracts the local schema, grafts
+# registry parameterization, and proves the SDK has no machine-local path.
+tests/smoke_test_local.sh
 
 actionlint
 shellcheck scripts/*.sh tests/*.sh

@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -41,6 +43,7 @@ def options(**overrides) -> argparse.Namespace:
         "go_module_path": "",
         "dotnet_root_namespace": "",
         "java_base_package": "",
+        "runtime_parameterization": "",
     }
     defaults.update(overrides)
     return argparse.Namespace(**defaults)
@@ -146,6 +149,71 @@ class PatchSchemaTest(unittest.TestCase):
         self.assertEqual(coordinates["dotnet"], "Descope.Pulumi.Descope")
         self.assertEqual(coordinates["java_group"], "com.descope.pulumi")
         self.assertEqual(coordinates["go_module"], "github.com/omercnet/pulumi-descope/sdk/go")
+
+
+class GraftParameterizationTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self.addCleanup(self._tmp.cleanup)
+
+    def runtime_schema(self, payload: dict) -> str:
+        path = self.root / "runtime.json"
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        return str(path)
+
+    def local_schema(self) -> dict:
+        schema = base_schema()
+        # This is verbatim what `pulumi package get-schema terraform-provider -- ./bin/x`
+        # produces: a parameter naming a path on the build machine.
+        schema["parameterization"] = {
+            "baseProvider": {"name": "terraform-provider", "version": "1.4.0"},
+            "parameter": "eyJsb2NhbCI6eyJwYXRoIjoiLi9iaW4vdGVycmFmb3JtLXByb3ZpZGVyLWRlc2NvcGUifX0=",
+        }
+        return schema
+
+    def test_local_parameter_is_replaced_by_registry_parameter(self):
+        runtime = {
+            "parameterization": {
+                "baseProvider": {"name": "terraform-provider", "version": "1.4.0"},
+                "parameter": "eyJyZW1vdGUiOnsidXJsIjoicmVnaXN0cnkub3BlbnRvZnUub3JnL2Rlc2NvcGUvZGVzY29wZSIsInZlcnNpb24iOiIwLjMuMTYifX0=",
+            }
+        }
+        patched = patch_schema.patch(
+            self.local_schema(),
+            options(runtime_parameterization=self.runtime_schema(runtime)),
+        )
+        parameter = base64.b64decode(patched["parameterization"]["parameter"]).decode()
+        self.assertIn("remote", parameter)
+        self.assertNotIn("local", parameter)
+
+    def test_graft_is_skipped_when_not_requested(self):
+        patched = patch_schema.patch(self.local_schema(), options())
+        parameter = base64.b64decode(patched["parameterization"]["parameter"]).decode()
+        self.assertIn("local", parameter)
+
+    def test_runtime_schema_without_parameter_is_fatal(self):
+        runtime = {"parameterization": {"baseProvider": {"name": "terraform-provider"}}}
+        with self.assertRaises(SystemExit) as caught:
+            patch_schema.patch(
+                self.local_schema(),
+                options(runtime_parameterization=self.runtime_schema(runtime)),
+            )
+        self.assertIn("Unusable runtime parameterization", str(caught.exception))
+
+    def test_base_provider_mismatch_is_fatal(self):
+        runtime = {
+            "parameterization": {
+                "baseProvider": {"name": "some-other-bridge", "version": "1.0.0"},
+                "parameter": "e30=",
+            }
+        }
+        with self.assertRaises(SystemExit) as caught:
+            patch_schema.patch(
+                self.local_schema(),
+                options(runtime_parameterization=self.runtime_schema(runtime)),
+            )
+        self.assertIn("Base provider mismatch", str(caught.exception))
 
 
 class Pep440Test(unittest.TestCase):

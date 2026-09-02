@@ -48,6 +48,22 @@ on:
         required: false
         type: string
         default: ""
+      runtime-provider:
+        description: >-
+          mode=local only, and required to publish. Registry address the published
+          SDK should resolve at runtime, e.g. "descope/descope". A schema extracted
+          from a provider binary is parameterized on that binary's local path, so it
+          must be re-pointed at a released provider before publication.
+        required: false
+        type: string
+        default: ""
+      runtime-provider-version:
+        description: >-
+          mode=local only. Exact released version of runtime-provider that the
+          published SDK should resolve at runtime.
+        required: false
+        type: string
+        default: ""
       sdk-version:
         description: >-
           Semver version to stamp on every generated SDK. Defaults to
@@ -255,6 +271,9 @@ jobs:
       python-package-name: ${{ steps.validate.outputs.python-package-name }}
       dotnet-root-namespace: ${{ steps.validate.outputs.dotnet-root-namespace }}
       java-base-package: ${{ steps.validate.outputs.java-base-package }}
+      runtime-provider: ${{ steps.validate.outputs.runtime-provider }}
+      runtime-provider-version: ${{ steps.validate.outputs.runtime-provider-version }}
+      needs-runtime-graft: ${{ steps.validate.outputs.needs-runtime-graft }}
       publisher-ref: ${{ steps.publisher.outputs.ref }}
     steps:
       - name: Resolve publisher revision
@@ -285,6 +304,8 @@ jobs:
           PROVIDER_BINARY_PATH: ${{ inputs.provider-binary-path }}
           BUILD_COMMAND: ${{ inputs.build-command }}
           PROVIDER_NAME: ${{ inputs.provider-name }}
+          RUNTIME_PROVIDER: ${{ inputs.runtime-provider }}
+          RUNTIME_PROVIDER_VERSION: ${{ inputs.runtime-provider-version }}
           SDK_VERSION: ${{ inputs.sdk-version || inputs.terraform-provider-version }}
           LANGUAGES: ${{ inputs.languages }}
           PUBLISH: ${{ inputs.publish }}
@@ -399,6 +420,21 @@ jobs:
           echo "::endgroup::"
           wc -c "${RUNNER_TEMP}/schema.json"
 
+      - name: Extract runtime parameterization schema
+        if: needs.validate.outputs.needs-runtime-graft == 'true'
+        env:
+          RUNTIME_PROVIDER: ${{ needs.validate.outputs.runtime-provider }}
+          RUNTIME_PROVIDER_VERSION: ${{ needs.validate.outputs.runtime-provider-version }}
+        run: |
+          set -euo pipefail
+          # The published SDK must resolve a released provider, not the local binary
+          # path baked into the local schema. The replacement parameterization is
+          # taken from a real registry extraction rather than hand-built.
+          pulumi package get-schema terraform-provider \
+            -- "${RUNTIME_PROVIDER}" "${RUNTIME_PROVIDER_VERSION}" \
+            > "${RUNNER_TEMP}/runtime-schema.json"
+          wc -c "${RUNNER_TEMP}/runtime-schema.json"
+
       - name: Pin version and package coordinates
         id: coordinates
         env:
@@ -408,18 +444,24 @@ jobs:
           GO_MODULE_PATH: ${{ needs.validate.outputs.go-module-path }}
           DOTNET_ROOT_NAMESPACE: ${{ needs.validate.outputs.dotnet-root-namespace }}
           JAVA_BASE_PACKAGE: ${{ needs.validate.outputs.java-base-package }}
+          RUNTIME_GRAFT: ${{ needs.validate.outputs.needs-runtime-graft }}
         run: |
           set -euo pipefail
-          python3 publisher/scripts/patch_schema.py \
-            --schema "${RUNNER_TEMP}/schema.json" \
-            --out "${RUNNER_TEMP}/schema-patched.json" \
-            --coordinates-out "${RUNNER_TEMP}/coordinates.json" \
-            --version "${VERSION}" \
-            --nodejs-package-name "${NODEJS_PACKAGE_NAME}" \
-            --python-package-name "${PYTHON_PACKAGE_NAME}" \
-            --go-module-path "${GO_MODULE_PATH}" \
-            --dotnet-root-namespace "${DOTNET_ROOT_NAMESPACE}" \
+          args=(
+            --schema "${RUNNER_TEMP}/schema.json"
+            --out "${RUNNER_TEMP}/schema-patched.json"
+            --coordinates-out "${RUNNER_TEMP}/coordinates.json"
+            --version "${VERSION}"
+            --nodejs-package-name "${NODEJS_PACKAGE_NAME}"
+            --python-package-name "${PYTHON_PACKAGE_NAME}"
+            --go-module-path "${GO_MODULE_PATH}"
+            --dotnet-root-namespace "${DOTNET_ROOT_NAMESPACE}"
             --java-base-package "${JAVA_BASE_PACKAGE}"
+          )
+          if [[ "${RUNTIME_GRAFT}" == "true" ]]; then
+            args+=(--runtime-parameterization "${RUNNER_TEMP}/runtime-schema.json")
+          fi
+          python3 publisher/scripts/patch_schema.py "${args[@]}"
 
       - name: Upload schema
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -648,6 +690,42 @@ jobs:
             --languages "${CANDIDATES}" \
             --version "${VERSION}"
 
+      - name: Validate publication credentials
+        if: steps.pending.outputs.any == 'true'
+        env:
+          SDKS: ${{ steps.pending.outputs.sdk }}
+          NODE_AUTH_TOKEN: ${{ secrets.npm-token }}
+          PYPI_PASSWORD: ${{ secrets.pypi-password }}
+          NUGET_PUBLISH_KEY: ${{ secrets.nuget-publish-key }}
+          PUBLISH_REPO_USERNAME: ${{ secrets.maven-username }}
+          PUBLISH_REPO_PASSWORD: ${{ secrets.maven-password }}
+          SIGNING_KEY: ${{ secrets.maven-signing-key }}
+          SIGNING_PASSWORD: ${{ secrets.maven-signing-password }}
+        run: |
+          set -euo pipefail
+          missing=()
+          selected=",${SDKS},"
+          if [[ "${selected}" == *,nodejs,* && -z "${NODE_AUTH_TOKEN}" ]]; then
+            missing+=(npm-token)
+          fi
+          if [[ "${selected}" == *,python,* && -z "${PYPI_PASSWORD}" ]]; then
+            missing+=(pypi-password)
+          fi
+          if [[ "${selected}" == *,dotnet,* && -z "${NUGET_PUBLISH_KEY}" ]]; then
+            missing+=(nuget-publish-key)
+          fi
+          if [[ "${selected}" == *,java,* ]]; then
+            [[ -n "${PUBLISH_REPO_USERNAME}" ]] || missing+=(maven-username)
+            [[ -n "${PUBLISH_REPO_PASSWORD}" ]] || missing+=(maven-password)
+            [[ -n "${SIGNING_KEY}" ]] || missing+=(maven-signing-key)
+            [[ -n "${SIGNING_PASSWORD}" ]] || missing+=(maven-signing-password)
+          fi
+          if (( ${#missing[@]} > 0 )); then
+            printf '::error title=Missing publication credentials::Required secrets are absent: %s\n' "${missing[*]}" >&2
+            exit 1
+          fi
+          echo "credentials present for: ${SDKS}"
+
       - name: Install Pulumi CLI
         if: steps.pending.outputs.any == 'true'
         uses: pulumi/actions@8e5e406f4007fca908480587cb9893c07090f58d # v7.0.0
@@ -713,6 +791,20 @@ jobs:
           SIGNING_PASSWORD: ${{ secrets.maven-signing-password }}
           PUBLISH_REPO_URL: ${{ inputs.maven-publish-repo-url }}
           PUBLISH_STAGING_URL: ${{ inputs.maven-staging-url }}
+
+      - name: Verify published versions are readable
+        if: steps.pending.outputs.any == 'true'
+        env:
+          PUBLISHED_SDKS: ${{ steps.pending.outputs.sdk }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          # Upstream marks Java publication continue-on-error, so a successful
+          # composite action is not proof that every package was published.
+          python3 scripts/verify_published.py \
+            --coordinates schema/coordinates.json \
+            --languages "${PUBLISHED_SDKS}" \
+            --version "${VERSION}"
 
       - name: Report skipped publications
         env:

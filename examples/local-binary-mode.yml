@@ -26,7 +26,7 @@ jobs:
   publish:
     permissions:
       contents: write  # publish-go-sdk-action pushes the Go SDK tag
-    uses: omercnet/pulumi-terraform-provider-publisher/.github/workflows/publish-terraform-provider-sdks.yml@v1
+    uses: omercnet/pulumi-terraform-provider-publisher/.github/workflows/publish-terraform-provider-sdks.yml@26a5b83e44552da492f1bfce145d1b3d450bb1e0 # v1
     with:
       mode: local
 
@@ -38,6 +38,13 @@ jobs:
       # Required in local mode: nothing in the source tree tells the publisher
       # which SDK version to stamp.
       sdk-version: ${{ github.ref_type == 'tag' && github.ref_name || '0.0.0-dev.1' }}
+
+      # A schema extracted from a local binary carries that machine-local path in
+      # its parameterization metadata. Publication therefore requires the released
+      # registry provider that consumers should resolve at runtime. The workflow
+      # obtains the parameterization from Pulumi itself; it never hand-builds it.
+      runtime-provider: descope/descope
+      runtime-provider-version: ${{ github.ref_type == 'tag' && github.ref_name || '0.3.16' }}
 
       languages: nodejs,python,go,dotnet,java,yaml
 

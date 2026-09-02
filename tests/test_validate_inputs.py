@@ -197,6 +197,63 @@ class ValidateInputsTest(unittest.TestCase):
             **{**LOCAL_BASE, "SDK_VERSION": ""},
         )
 
+    # --- runtime parameterization (local mode publication) -------------------
+
+    def test_local_publish_without_runtime_provider_is_rejected(self):
+        self.expect_error(
+            "requires runtime-provider",
+            **{**LOCAL_BASE, "PUBLISH": "true"},
+        )
+
+    def test_local_publish_with_runtime_provider_accepted(self):
+        outputs = self.run_validate(
+            **{
+                **LOCAL_BASE,
+                "PUBLISH": "true",
+                "RUNTIME_PROVIDER": "descope/descope",
+                "RUNTIME_PROVIDER_VERSION": "v0.3.16",
+            }
+        )
+        self.assertEqual(outputs["runtime-provider"], "descope/descope")
+        self.assertEqual(outputs["runtime-provider-version"], "0.3.16")
+        self.assertEqual(outputs["needs-runtime-graft"], "true")
+
+    def test_local_dry_run_needs_no_runtime_provider(self):
+        outputs = self.run_validate(**LOCAL_BASE)
+        self.assertEqual(outputs["needs-runtime-graft"], "false")
+
+    def test_local_dry_run_may_still_graft(self):
+        outputs = self.run_validate(
+            **{
+                **LOCAL_BASE,
+                "RUNTIME_PROVIDER": "descope/descope",
+                "RUNTIME_PROVIDER_VERSION": "0.3.16",
+            }
+        )
+        self.assertEqual(outputs["needs-runtime-graft"], "true")
+
+    def test_runtime_provider_version_without_provider_is_rejected(self):
+        self.expect_error(
+            "requires runtime-provider",
+            **{**LOCAL_BASE, "RUNTIME_PROVIDER_VERSION": "0.3.16"},
+        )
+
+    def test_runtime_provider_version_must_be_exact(self):
+        self.expect_error(
+            "exact semver",
+            **{
+                **LOCAL_BASE,
+                "RUNTIME_PROVIDER": "descope/descope",
+                "RUNTIME_PROVIDER_VERSION": "^0.3.0",
+            },
+        )
+
+    def test_runtime_provider_rejected_in_registry_mode(self):
+        self.expect_error(
+            "only valid for mode=local",
+            **{**REGISTRY_BASE, "RUNTIME_PROVIDER": "descope/descope"},
+        )
+
     # --- languages ----------------------------------------------------------
 
     def test_language_subset_and_ordering(self):

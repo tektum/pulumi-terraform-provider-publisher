@@ -28,7 +28,49 @@ def go_root_package(schema: dict) -> str:
     return IDENT_RE.sub("", str(schema.get("name", "provider")).lower()) or "provider"
 
 
+def graft_parameterization(schema: dict, runtime_schema_path: str) -> dict:
+    """Replace the schema's parameterization with a registry-resolved one.
+
+    A schema extracted from a local provider binary carries a machine-local
+    parameter -- literally {"local":{"path":"./bin/terraform-provider-x"}}. Publishing
+    that verbatim yields an SDK that installs cleanly and then tries to exec a path
+    that does not exist on the consumer's machine.
+
+    The replacement is not hand-built: it is copied from a real
+    `pulumi package get-schema terraform-provider -- <address> <version>` run, so
+    the parameter format is never guessed.
+    """
+    with open(runtime_schema_path, encoding="utf-8") as handle:
+        runtime_schema = json.load(handle)
+
+    runtime_parameterization = runtime_schema.get("parameterization")
+    if not runtime_parameterization or not runtime_parameterization.get("parameter"):
+        raise SystemExit(
+            "::error title=Unusable runtime parameterization::the registry schema used to "
+            "resolve the published provider has no 'parameterization.parameter'."
+        )
+
+    local_base = (schema.get("parameterization") or {}).get("baseProvider", {})
+    runtime_base = runtime_parameterization.get("baseProvider", {})
+    if local_base and runtime_base and local_base.get("name") != runtime_base.get("name"):
+        raise SystemExit(
+            f"::error title=Base provider mismatch::the local schema is parameterized on "
+            f"{local_base.get('name')!r} but the runtime schema is parameterized on "
+            f"{runtime_base.get('name')!r}. Refusing to graft."
+        )
+
+    schema["parameterization"] = runtime_parameterization
+    print(
+        "grafted runtime parameterization from "
+        f"{runtime_base.get('name')}@{runtime_base.get('version')}"
+    )
+    return schema
+
+
 def patch(schema: dict, opts: argparse.Namespace) -> dict:
+    if getattr(opts, "runtime_parameterization", ""):
+        schema = graft_parameterization(schema, opts.runtime_parameterization)
+
     if "parameterization" not in schema:
         raise SystemExit(
             "::error title=Missing parameterization::the extracted schema has no "
@@ -105,6 +147,14 @@ def main() -> int:
     parser.add_argument("--go-module-path", default="")
     parser.add_argument("--dotnet-root-namespace", default="")
     parser.add_argument("--java-base-package", default="")
+    parser.add_argument(
+        "--runtime-parameterization",
+        default="",
+        help=(
+            "path to a registry-extracted schema whose parameterization replaces this "
+            "schema's. Required to publish SDKs generated from a local provider binary."
+        ),
+    )
     opts = parser.parse_args()
 
     with open(opts.schema, encoding="utf-8") as handle:

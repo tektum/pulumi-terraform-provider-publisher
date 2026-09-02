@@ -180,6 +180,45 @@ def validate() -> dict[str, str]:
             )
         provider_version = ""
 
+    runtime_provider = env("RUNTIME_PROVIDER")
+    runtime_provider_version = env("RUNTIME_PROVIDER_VERSION")
+    publish_requested = env_bool("PUBLISH", False)
+
+    if mode == "registry":
+        if runtime_provider or runtime_provider_version:
+            raise InputError(
+                "runtime-provider/runtime-provider-version are only valid for mode=local; "
+                "mode=registry already resolves the published provider from the registry."
+            )
+    else:
+        if runtime_provider:
+            check(
+                REGISTRY_ADDRESS_RE,
+                runtime_provider,
+                "runtime-provider",
+                "expected '<namespace>/<name>' or '<host>/<namespace>/<name>'",
+            )
+            runtime_provider_version = normalize_version(
+                runtime_provider_version, "runtime-provider-version"
+            )
+        elif runtime_provider_version:
+            raise InputError(
+                "runtime-provider-version requires runtime-provider"
+            )
+        elif publish_requested:
+            # A schema extracted from a local binary carries a machine-local
+            # parameter. Publishing it would ship an SDK that cannot resolve its
+            # provider on any other machine.
+            raise InputError(
+                "mode=local with publish=true requires runtime-provider and "
+                "runtime-provider-version. A schema extracted from a provider binary is "
+                "parameterized on that binary's local path, so the published SDK could "
+                "not resolve its provider on a consumer machine. Set runtime-provider to "
+                "the registry address and runtime-provider-version to the released "
+                "version the published SDK should resolve at runtime, or set publish=false "
+                "to generate and validate only."
+            )
+
     sdk_version = normalize_version(env("SDK_VERSION"), "sdk-version")
     # An omitted LANGUAGES falls back to "all"; an explicitly empty one is an error,
     # because silently publishing every language is not a safe reading of "".
@@ -246,6 +285,9 @@ def validate() -> dict[str, str]:
         "terraform-provider": provider,
         "terraform-provider-version": provider_version,
         "provider-binary-path": provider_binary,
+        "runtime-provider": runtime_provider,
+        "runtime-provider-version": runtime_provider_version,
+        "needs-runtime-graft": str(bool(runtime_provider)).lower(),
         "has-build-command": str(bool(build_command)).lower(),
         "provider-name": provider_name,
         "version": sdk_version,
