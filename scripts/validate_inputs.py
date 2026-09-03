@@ -50,6 +50,7 @@ PYPI_NAME_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$")
 GO_MODULE_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._~-]*(?:\.[a-zA-Z0-9._~-]+)+(?:/[a-zA-Z0-9._~-]+)+$")
 DOTNET_NS_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$")
 JAVA_PKG_RE = re.compile(r"^[a-z_][a-z0-9_]*(?:\.[a-z_][a-z0-9_]*)*$")
+NAMESPACE_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 # Relative, non-escaping repository sub-path, e.g. "sdk/go". "." and ".." segments
 # are excluded by the leading character class so the path cannot escape the repo.
 REL_PATH_RE = re.compile(
@@ -121,6 +122,10 @@ def parse_languages(raw: str) -> list[str]:
 def check(pattern: re.Pattern[str], value: str, field: str, hint: str) -> None:
     if value and not pattern.match(value):
         raise InputError(f"{field}={value!r} is invalid: {hint}")
+
+def title_identifier(value: str) -> str:
+    """Turn a kebab/snake/dotted package token into a .NET identifier."""
+    return "".join(part[:1].upper() + part[1:] for part in re.split(r"[^A-Za-z0-9]+", value) if part)
 
 
 def validate() -> dict[str, str]:
@@ -233,16 +238,38 @@ def validate() -> dict[str, str]:
             f"provider-name={provider_name!r} must be a lowercase kebab-case token"
         )
 
+    namespace = env("NAMESPACE").lower()
+    coordinate_provider = provider or runtime_provider
+    provider_parts = coordinate_provider.split("/") if coordinate_provider else []
+    if not namespace and len(provider_parts) >= 2:
+        namespace = provider_parts[-2].lower()
+    if namespace and not NAMESPACE_RE.match(namespace):
+        raise InputError(
+            f"namespace={namespace!r} must be lowercase alphanumeric kebab-case"
+        )
+
+    package_name = provider_name or (provider_parts[-1].lower() if provider_parts else "")
+    package_slug = re.sub(r"[^a-z0-9-]+", "-", package_name).strip("-")
+    package_python = package_slug.replace("-", "_")
+    namespace_python = namespace.replace("-", "_")
+    namespace_java = namespace.replace("-", "_")
+
     nodejs_pkg = env("NODEJS_PACKAGE_NAME")
     python_pkg = env("PYTHON_PACKAGE_NAME")
+    dotnet_ns = env("DOTNET_ROOT_NAMESPACE")
+    java_pkg = env("JAVA_BASE_PACKAGE")
+    if namespace and package_slug:
+        nodejs_pkg = nodejs_pkg or f"@{namespace}/pulumi-{package_slug}"
+        python_pkg = python_pkg or f"{namespace_python}_pulumi_{package_python}"
+        dotnet_ns = dotnet_ns or f"{title_identifier(namespace)}.Pulumi"
+        java_pkg = java_pkg or f"com.{namespace_java}.pulumi"
+
     go_module = env("GO_MODULE_PATH")
     go_repo = env("GO_SDK_REPOSITORY")
     # An explicit empty go-sdk-path means "publish at the repository root"; only an
     # absent variable falls back to the conventional sdk/go.
     go_path = "sdk/go" if os.environ.get("GO_SDK_PATH") is None else env("GO_SDK_PATH")
     go_base_ref = env("GO_SDK_BASE_REF", "main")
-    dotnet_ns = env("DOTNET_ROOT_NAMESPACE")
-    java_pkg = env("JAVA_BASE_PACKAGE")
 
     check(NPM_NAME_RE, nodejs_pkg, "nodejs-package-name", "expected an npm name like '@scope/name'")
     check(PYPI_NAME_RE, python_pkg, "python-package-name", "expected a PEP 503 compatible name")
@@ -290,6 +317,7 @@ def validate() -> dict[str, str]:
         "needs-runtime-graft": str(bool(runtime_provider)).lower(),
         "has-build-command": str(bool(build_command)).lower(),
         "provider-name": provider_name,
+        "namespace": namespace,
         "version": sdk_version,
         "version-v": f"v{sdk_version}",
         "languages": ",".join(languages),

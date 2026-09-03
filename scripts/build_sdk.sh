@@ -41,8 +41,8 @@ build_nodejs() {
   if [[ -f "${LANG_DIR}/README.md" ]]; then
     cp "${LANG_DIR}/README.md" "${LANG_DIR}/bin/README.md"
   fi
-  if [[ -f LICENSE ]]; then
-    cp LICENSE "${LANG_DIR}/bin/LICENSE"
+  if [[ -f "${SCRIPT_DIR}/../LICENSE" ]]; then
+    cp "${SCRIPT_DIR}/../LICENSE" "${LANG_DIR}/bin/LICENSE"
   fi
 
   # node_modules must never reach the artifact: it is multi-hundred-megabyte, and the

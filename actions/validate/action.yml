@@ -1,0 +1,148 @@
+name: Validate publisher inputs
+description: Validate and normalize Terraform-provider Pulumi SDK publisher inputs.
+
+inputs:
+  mode:
+    description: registry or local
+    default: registry
+  terraform-provider:
+    description: Terraform registry address for registry mode
+  terraform-provider-version:
+    description: Exact Terraform provider semver; defaults to the triggering tag
+  provider-binary-path:
+    description: Local provider binary path for local mode
+  build-command:
+    description: Trusted caller build command for local mode
+  runtime-provider:
+    description: Registry provider the published local-mode SDK resolves
+  runtime-provider-version:
+    description: Exact version of runtime-provider
+  sdk-version:
+    description: SDK semver; defaults to provider version or triggering tag
+  languages:
+    description: Comma-separated languages or all
+    default: all
+  publish:
+    description: Whether publication is enabled
+    default: "false"
+  provider-name:
+    description: Generated Pulumi package name override
+  namespace:
+    description: Package namespace used to derive language coordinates
+  nodejs-package-name:
+    description: npm package name override
+  python-package-name:
+    description: PyPI package name override
+  go-module-path:
+    description: Go module path override
+  go-sdk-repository:
+    description: Go SDK owner/repository
+  go-sdk-path:
+    description: Path to the Go module in go-sdk-repository
+    default: sdk/go
+  go-sdk-base-ref:
+    description: Parent ref for the Go SDK tag
+    default: main
+  dotnet-root-namespace:
+    description: .NET root namespace override
+  java-base-package:
+    description: Java package and Maven group override
+  assert-prerelease:
+    description: Reject a stable SDK version
+    default: "false"
+
+outputs:
+  mode:
+    value: ${{ steps.validate.outputs.mode }}
+  terraform-provider:
+    value: ${{ steps.validate.outputs.terraform-provider }}
+  terraform-provider-version:
+    value: ${{ steps.validate.outputs.terraform-provider-version }}
+  version:
+    value: ${{ steps.validate.outputs.version }}
+  namespace:
+    value: ${{ steps.validate.outputs.namespace }}
+  languages:
+    value: ${{ steps.validate.outputs.languages }}
+  build-languages-json:
+    value: ${{ steps.validate.outputs.build-languages-json }}
+  publisher-sdks:
+    value: ${{ steps.validate.outputs.publisher-sdks }}
+  publish-nodejs:
+    value: ${{ steps.validate.outputs.publish-nodejs }}
+  publish-python:
+    value: ${{ steps.validate.outputs.publish-python }}
+  publish-dotnet:
+    value: ${{ steps.validate.outputs.publish-dotnet }}
+  publish-java:
+    value: ${{ steps.validate.outputs.publish-java }}
+  publish-go:
+    value: ${{ steps.validate.outputs.publish-go }}
+  validate-yaml:
+    value: ${{ steps.validate.outputs.validate-yaml }}
+  publish:
+    value: ${{ steps.validate.outputs.publish }}
+  go-module-path:
+    value: ${{ steps.validate.outputs.go-module-path }}
+  go-sdk-repository:
+    value: ${{ steps.validate.outputs.go-sdk-repository }}
+  go-sdk-path:
+    value: ${{ steps.validate.outputs.go-sdk-path }}
+  go-sdk-base-ref:
+    value: ${{ steps.validate.outputs.go-sdk-base-ref }}
+  nodejs-package-name:
+    value: ${{ steps.validate.outputs.nodejs-package-name }}
+  python-package-name:
+    value: ${{ steps.validate.outputs.python-package-name }}
+  dotnet-root-namespace:
+    value: ${{ steps.validate.outputs.dotnet-root-namespace }}
+  java-base-package:
+    value: ${{ steps.validate.outputs.java-base-package }}
+  runtime-provider:
+    value: ${{ steps.validate.outputs.runtime-provider }}
+  runtime-provider-version:
+    value: ${{ steps.validate.outputs.runtime-provider-version }}
+  needs-runtime-graft:
+    value: ${{ steps.validate.outputs.needs-runtime-graft }}
+
+runs:
+  using: composite
+  steps:
+    - name: Validate and normalize inputs
+      id: validate
+      shell: bash
+      env:
+        ACTION_DIR: ${{ github.action_path }}
+        MODE: ${{ inputs.mode }}
+        TF_PROVIDER: ${{ inputs.terraform-provider }}
+        TF_PROVIDER_VERSION: ${{ inputs.terraform-provider-version || github.ref_name }}
+        PROVIDER_BINARY_PATH: ${{ inputs.provider-binary-path }}
+        BUILD_COMMAND: ${{ inputs.build-command }}
+        PROVIDER_NAME: ${{ inputs.provider-name }}
+        RUNTIME_PROVIDER: ${{ inputs.runtime-provider }}
+        RUNTIME_PROVIDER_VERSION: ${{ inputs.runtime-provider-version }}
+        SDK_VERSION: ${{ inputs.sdk-version || inputs.terraform-provider-version || github.ref_name }}
+        LANGUAGES: ${{ inputs.languages }}
+        PUBLISH: ${{ inputs.publish }}
+        NAMESPACE: ${{ inputs.namespace }}
+        NODEJS_PACKAGE_NAME: ${{ inputs.nodejs-package-name }}
+        PYTHON_PACKAGE_NAME: ${{ inputs.python-package-name }}
+        GO_MODULE_PATH: ${{ inputs.go-module-path }}
+        GO_SDK_REPOSITORY: ${{ inputs.go-sdk-repository || github.repository }}
+        GO_SDK_PATH: ${{ inputs.go-sdk-path }}
+        GO_SDK_BASE_REF: ${{ inputs.go-sdk-base-ref }}
+        DOTNET_ROOT_NAMESPACE: ${{ inputs.dotnet-root-namespace }}
+        JAVA_BASE_PACKAGE: ${{ inputs.java-base-package }}
+      run: python3 "${ACTION_DIR}/../../scripts/validate_inputs.py"
+
+    - name: Assert prerelease
+      if: inputs.assert-prerelease == 'true'
+      shell: bash
+      env:
+        VERSION: ${{ steps.validate.outputs.version }}
+      run: |
+        set -euo pipefail
+        if [[ ! "${VERSION}" =~ - ]]; then
+          echo "::error title=Refusing stable version::assert-prerelease is true but ${VERSION} is stable." >&2
+          exit 1
+        fi

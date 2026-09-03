@@ -1,0 +1,7 @@
+# actionlint v1.7.12 predates GitHub's 2026-07-30 `$/` self-repository syntax.
+# Scope the compatibility ignore to the composite-backed reusable workflow and
+# only to self-repository actions. Remove when actionlint releases parser support.
+paths:
+  .github/workflows/publish.yml:
+    ignore:
+      - 'specifying action "\$/actions/[^"]+" in invalid format because ref is missing'

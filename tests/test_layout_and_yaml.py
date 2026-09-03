@@ -237,7 +237,7 @@ class JavaLayoutTest(TempTreeTest):
 
 
 class GoLayoutTest(TempTreeTest):
-    def build(self, module: str = "module github.com/omercnet/pulumi-descope/sdk/go") -> Path:
+    def build(self, module: str = "module github.com/tektum/pulumi-descope/sdk/go") -> Path:
         sdk = self.root / "go"
         write(sdk / "go.mod", f"{module}\n\ngo 1.25\n")
         write_json(sdk / "descope" / "pulumi-plugin.json", PLUGIN_JSON)
@@ -246,7 +246,7 @@ class GoLayoutTest(TempTreeTest):
 
     def test_valid_layout_passes(self):
         notes = verify_layout.check_go(self.build(), "0.3.16")
-        self.assertIn("github.com/omercnet/pulumi-descope/sdk/go", notes[0])
+        self.assertIn("github.com/tektum/pulumi-descope/sdk/go", notes[0])
 
     def test_missing_go_mod_is_rejected(self):
         sdk = self.root / "go"

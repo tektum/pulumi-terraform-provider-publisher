@@ -70,11 +70,11 @@ class PatchSchemaTest(unittest.TestCase):
     def test_go_import_base_path_is_rebuilt_under_module_path(self):
         patched = patch_schema.patch(
             base_schema(),
-            options(go_module_path="github.com/omercnet/pulumi-descope/sdk/go"),
+            options(go_module_path="github.com/tektum/pulumi-descope/sdk/go"),
         )
         self.assertEqual(
             patched["language"]["go"]["importBasePath"],
-            "github.com/omercnet/pulumi-descope/sdk/go/descope",
+            "github.com/tektum/pulumi-descope/sdk/go/descope",
         )
         self.assertEqual(patched["language"]["go"]["rootPackageName"], "descope")
 
@@ -140,7 +140,7 @@ class PatchSchemaTest(unittest.TestCase):
                 python_package_name="descope_pulumi",
                 dotnet_root_namespace="Descope.Pulumi",
                 java_base_package="com.descope.pulumi",
-                go_module_path="github.com/omercnet/pulumi-descope/sdk/go",
+                go_module_path="github.com/tektum/pulumi-descope/sdk/go",
             ),
         )
         coordinates = patch_schema.resolved_coordinates(patched)
@@ -148,7 +148,7 @@ class PatchSchemaTest(unittest.TestCase):
         self.assertEqual(coordinates["python"], "descope_pulumi")
         self.assertEqual(coordinates["dotnet"], "Descope.Pulumi.Descope")
         self.assertEqual(coordinates["java_group"], "com.descope.pulumi")
-        self.assertEqual(coordinates["go_module"], "github.com/omercnet/pulumi-descope/sdk/go")
+        self.assertEqual(coordinates["go_module"], "github.com/tektum/pulumi-descope/sdk/go")
 
 
 class GraftParameterizationTest(unittest.TestCase):

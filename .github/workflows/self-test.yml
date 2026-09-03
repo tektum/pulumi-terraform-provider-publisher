@@ -1,10 +1,7 @@
 name: Self test
 
-# Exercises the reusable workflow through a real `workflow_call`, in dry-run mode.
-# This is the only check that proves the workflow_call interface itself resolves:
-# input typing, job graph, artifact names and the publish guards.
-#
-# No secrets are passed and publish stays false, so nothing can be published.
+# Exercises both supported public surfaces in dry-run mode: the full reusable
+# workflow and the registry-only root action. No publishing credentials are passed.
 
 on:
   push:
@@ -20,18 +17,33 @@ concurrency:
 jobs:
   registry-mode-dry-run:
     name: Registry mode (dry run)
-    uses: ./.github/workflows/publish-terraform-provider-sdks.yml
+    uses: ./.github/workflows/publish.yml
     permissions:
       contents: write # reusable publish-go job's maximum; publish=false skips that job
     with:
-      mode: registry
       terraform-provider: descope/descope
       terraform-provider-version: 0.3.16
+      namespace: descope
       languages: nodejs,python,go,dotnet,java,yaml
       publish: false
-      nodejs-package-name: "@descope/pulumi-descope"
-      python-package-name: descope_pulumi_descope
-      go-sdk-repository: omercnet/pulumi-terraform-provider-publisher
+      go-sdk-repository: tektum/pulumi-terraform-provider-publisher
       go-sdk-path: sdk/go
-      dotnet-root-namespace: Descope.Pulumi
-      java-base-package: com.descope.pulumi
+
+  root-action-dry-run:
+    name: Root action (registry dry run)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Generate through root action
+        uses: ./
+        with:
+          terraform-provider: descope/descope
+          terraform-provider-version: 0.3.16
+          namespace: descope
+          languages: nodejs,yaml
+          publish: false

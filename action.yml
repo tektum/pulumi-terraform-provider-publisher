@@ -1,0 +1,217 @@
+name: Pulumi Terraform Provider Publisher
+description: Generate and publish registry-backed Pulumi SDKs for every supported language.
+author: Tektum
+
+branding:
+  icon: package
+  color: purple
+
+inputs:
+  terraform-provider:
+    description: Terraform registry address, such as descope/descope
+    required: true
+  terraform-provider-version:
+    description: Exact provider semver; defaults to the triggering tag
+  namespace:
+    description: Package namespace; defaults to the Terraform registry namespace
+  languages:
+    description: Comma-separated nodejs,python,go,dotnet,java,yaml or all
+    default: all
+  publish:
+    description: Publish generated packages; generation and validation always run
+    default: "false"
+  provider-name:
+    description: Generated Pulumi package name override
+  nodejs-package-name:
+    description: npm package name override
+  python-package-name:
+    description: PyPI package name override
+  go-module-path:
+    description: Go module path override
+  go-sdk-repository:
+    description: Go SDK owner/repository; defaults to the caller repository
+  go-sdk-path:
+    default: sdk/go
+  go-sdk-base-ref:
+    default: main
+  go-sdk-skip-go-get:
+    default: "false"
+  dotnet-root-namespace:
+    description: .NET root namespace override
+  java-base-package:
+    description: Java package and Maven group override
+  npm-token:
+    description: npm automation token when nodejs publishing is selected
+  pypi-username:
+    default: __token__
+  pypi-password:
+    description: PyPI API token when python publishing is selected
+  nuget-publish-key:
+    description: nuget.org API key when dotnet publishing is selected
+  maven-username:
+  maven-password:
+  maven-signing-key:
+  maven-signing-password:
+  maven-publish-repo-url:
+  maven-staging-url:
+  assert-prerelease:
+    default: "false"
+  pulumi-version:
+    default: "^3"
+  pulumictl-version:
+    default: v0.0.50
+  node-version:
+    default: "20.x"
+  python-version:
+    default: "3.11"
+  go-version:
+    default: "1.25"
+  dotnet-version:
+    default: "8.0.x"
+  java-version:
+    default: "11"
+
+outputs:
+  version:
+    description: Normalized SDK version
+    value: ${{ steps.validate.outputs.version }}
+  package-name:
+    description: Generated Pulumi package name
+    value: ${{ steps.schema.outputs.package-name }}
+  published:
+    description: Non-Go language SDKs published by this run
+    value: ${{ steps.publish.outputs.published }}
+
+runs:
+  using: composite
+  steps:
+    - name: Validate inputs
+      id: validate
+      uses: $/actions/validate
+      with:
+        mode: registry
+        terraform-provider: ${{ inputs.terraform-provider }}
+        terraform-provider-version: ${{ inputs.terraform-provider-version }}
+        languages: ${{ inputs.languages }}
+        publish: ${{ inputs.publish }}
+        provider-name: ${{ inputs.provider-name }}
+        namespace: ${{ inputs.namespace }}
+        nodejs-package-name: ${{ inputs.nodejs-package-name }}
+        python-package-name: ${{ inputs.python-package-name }}
+        go-module-path: ${{ inputs.go-module-path }}
+        go-sdk-repository: ${{ inputs.go-sdk-repository }}
+        go-sdk-path: ${{ inputs.go-sdk-path }}
+        go-sdk-base-ref: ${{ inputs.go-sdk-base-ref }}
+        dotnet-root-namespace: ${{ inputs.dotnet-root-namespace }}
+        java-base-package: ${{ inputs.java-base-package }}
+        assert-prerelease: ${{ inputs.assert-prerelease }}
+
+    - name: Extract package schema
+      id: schema
+      uses: $/actions/schema
+      with:
+        mode: registry
+        terraform-provider: ${{ steps.validate.outputs.terraform-provider }}
+        terraform-provider-version: ${{ steps.validate.outputs.terraform-provider-version }}
+        version: ${{ steps.validate.outputs.version }}
+        provider-name: ${{ inputs.provider-name }}
+        nodejs-package-name: ${{ steps.validate.outputs.nodejs-package-name }}
+        python-package-name: ${{ steps.validate.outputs.python-package-name }}
+        go-module-path: ${{ steps.validate.outputs.go-module-path }}
+        dotnet-root-namespace: ${{ steps.validate.outputs.dotnet-root-namespace }}
+        java-base-package: ${{ steps.validate.outputs.java-base-package }}
+        checkout-caller: "false"
+        pulumi-version: ${{ inputs.pulumi-version }}
+        go-version: ${{ inputs.go-version }}
+
+    - name: Build Node.js SDK
+      if: steps.validate.outputs.publish-nodejs == 'true'
+      uses: $/actions/build
+      with:
+        language: nodejs
+        version: ${{ steps.validate.outputs.version }}
+        pulumi-version: ${{ inputs.pulumi-version }}
+        node-version: ${{ inputs.node-version }}
+
+    - name: Build Python SDK
+      if: steps.validate.outputs.publish-python == 'true'
+      uses: $/actions/build
+      with:
+        language: python
+        version: ${{ steps.validate.outputs.version }}
+        pulumi-version: ${{ inputs.pulumi-version }}
+        python-version: ${{ inputs.python-version }}
+
+    - name: Build Go SDK
+      if: steps.validate.outputs.publish-go == 'true'
+      uses: $/actions/build
+      with:
+        language: go
+        version: ${{ steps.validate.outputs.version }}
+        pulumi-version: ${{ inputs.pulumi-version }}
+        go-version: ${{ inputs.go-version }}
+
+    - name: Build .NET SDK
+      if: steps.validate.outputs.publish-dotnet == 'true'
+      uses: $/actions/build
+      with:
+        language: dotnet
+        version: ${{ steps.validate.outputs.version }}
+        pulumi-version: ${{ inputs.pulumi-version }}
+        dotnet-version: ${{ inputs.dotnet-version }}
+
+    - name: Build Java SDK
+      if: steps.validate.outputs.publish-java == 'true'
+      uses: $/actions/build
+      with:
+        language: java
+        version: ${{ steps.validate.outputs.version }}
+        pulumi-version: ${{ inputs.pulumi-version }}
+
+    - name: Validate YAML package
+      if: steps.validate.outputs.validate-yaml == 'true'
+      uses: $/actions/validate-yaml
+      with:
+        mode: registry
+        terraform-provider: ${{ steps.validate.outputs.terraform-provider }}
+        terraform-provider-version: ${{ steps.validate.outputs.terraform-provider-version }}
+        provider-name: ${{ inputs.provider-name }}
+        package-name: ${{ steps.schema.outputs.package-name }}
+        checkout-caller: "false"
+        pulumi-version: ${{ inputs.pulumi-version }}
+
+    - name: Publish package SDKs
+      id: publish
+      if: inputs.publish == 'true' && steps.validate.outputs.publisher-sdks != '' && github.event_name != 'pull_request'
+      uses: $/actions/publish
+      with:
+        sdks: ${{ steps.validate.outputs.publisher-sdks }}
+        version: ${{ steps.validate.outputs.version }}
+        npm-token: ${{ inputs.npm-token }}
+        pypi-username: ${{ inputs.pypi-username }}
+        pypi-password: ${{ inputs.pypi-password }}
+        nuget-publish-key: ${{ inputs.nuget-publish-key }}
+        maven-username: ${{ inputs.maven-username }}
+        maven-password: ${{ inputs.maven-password }}
+        maven-signing-key: ${{ inputs.maven-signing-key }}
+        maven-signing-password: ${{ inputs.maven-signing-password }}
+        maven-publish-repo-url: ${{ inputs.maven-publish-repo-url }}
+        maven-staging-url: ${{ inputs.maven-staging-url }}
+        pulumi-version: ${{ inputs.pulumi-version }}
+        pulumictl-version: ${{ inputs.pulumictl-version }}
+        node-version: ${{ inputs.node-version }}
+        python-version: ${{ inputs.python-version }}
+        go-version: ${{ inputs.go-version }}
+        dotnet-version: ${{ inputs.dotnet-version }}
+        java-version: ${{ inputs.java-version }}
+
+    - name: Publish Go SDK
+      if: inputs.publish == 'true' && steps.validate.outputs.publish-go == 'true' && github.event_name != 'pull_request'
+      uses: $/actions/publish-go
+      with:
+        repository: ${{ steps.validate.outputs.go-sdk-repository }}
+        base-ref: ${{ steps.validate.outputs.go-sdk-base-ref }}
+        path: ${{ steps.validate.outputs.go-sdk-path }}
+        version: ${{ steps.validate.outputs.version }}
+        skip-go-get: ${{ inputs.go-sdk-skip-go-get }}
+        go-version: ${{ inputs.go-version }}

@@ -25,7 +25,7 @@ REGISTRY_BASE = {
     "SDK_VERSION": "0.3.16",
     "LANGUAGES": "all",
     "PUBLISH": "false",
-    "GO_SDK_REPOSITORY": "omercnet/pulumi-descope",
+    "GO_SDK_REPOSITORY": "tektum/pulumi-descope",
     "GO_SDK_PATH": "sdk/go",
 }
 
@@ -35,7 +35,7 @@ LOCAL_BASE = {
     "SDK_VERSION": "0.4.0",
     "LANGUAGES": "all",
     "PUBLISH": "false",
-    "GO_SDK_REPOSITORY": "omercnet/pulumi-descope",
+    "GO_SDK_REPOSITORY": "tektum/pulumi-descope",
     "GO_SDK_PATH": "sdk/go",
 }
 
@@ -292,7 +292,7 @@ class ValidateInputsTest(unittest.TestCase):
     def test_go_module_path_derived_from_repository(self):
         outputs = self.run_validate(**REGISTRY_BASE)
         self.assertEqual(
-            outputs["go-module-path"], "github.com/omercnet/pulumi-descope/sdk/go"
+            outputs["go-module-path"], "github.com/tektum/pulumi-descope/sdk/go"
         )
 
     def test_go_module_path_mismatch_rejected(self):
@@ -306,10 +306,10 @@ class ValidateInputsTest(unittest.TestCase):
             **{
                 **REGISTRY_BASE,
                 "GO_SDK_PATH": "sdk",
-                "GO_MODULE_PATH": "github.com/omercnet/pulumi-descope/sdk",
+                "GO_MODULE_PATH": "github.com/tektum/pulumi-descope/sdk",
             }
         )
-        self.assertEqual(outputs["go-module-path"], "github.com/omercnet/pulumi-descope/sdk")
+        self.assertEqual(outputs["go-module-path"], "github.com/tektum/pulumi-descope/sdk")
 
     def test_go_publish_requires_repository(self):
         self.expect_error(
@@ -355,6 +355,44 @@ class ValidateInputsTest(unittest.TestCase):
         self.assertEqual(outputs["python-package-name"], "descope-pulumi")
         self.assertEqual(outputs["dotnet-root-namespace"], "Descope.Pulumi")
         self.assertEqual(outputs["java-base-package"], "com.descope.pulumi")
+
+    def test_coordinates_derive_from_registry_namespace(self):
+        outputs = self.run_validate(**REGISTRY_BASE)
+        self.assertEqual(outputs["namespace"], "descope")
+        self.assertEqual(outputs["nodejs-package-name"], "@descope/pulumi-descope")
+        self.assertEqual(outputs["python-package-name"], "descope_pulumi_descope")
+        self.assertEqual(outputs["dotnet-root-namespace"], "Descope.Pulumi")
+        self.assertEqual(outputs["java-base-package"], "com.descope.pulumi")
+
+    def test_explicit_namespace_overrides_registry_namespace(self):
+        outputs = self.run_validate(**{**REGISTRY_BASE, "NAMESPACE": "tektum"})
+        self.assertEqual(outputs["namespace"], "tektum")
+        self.assertEqual(outputs["nodejs-package-name"], "@tektum/pulumi-descope")
+        self.assertEqual(outputs["python-package-name"], "tektum_pulumi_descope")
+        self.assertEqual(outputs["dotnet-root-namespace"], "Tektum.Pulumi")
+        self.assertEqual(outputs["java-base-package"], "com.tektum.pulumi")
+
+    def test_explicit_coordinates_override_namespace_defaults(self):
+        outputs = self.run_validate(
+            **{
+                **REGISTRY_BASE,
+                "NAMESPACE": "tektum",
+                "NODEJS_PACKAGE_NAME": "@custom/name",
+                "PYTHON_PACKAGE_NAME": "custom_python",
+                "DOTNET_ROOT_NAMESPACE": "Custom.Pulumi",
+                "JAVA_BASE_PACKAGE": "dev.custom.pulumi",
+            }
+        )
+        self.assertEqual(outputs["nodejs-package-name"], "@custom/name")
+        self.assertEqual(outputs["python-package-name"], "custom_python")
+        self.assertEqual(outputs["dotnet-root-namespace"], "Custom.Pulumi")
+        self.assertEqual(outputs["java-base-package"], "dev.custom.pulumi")
+
+    def test_invalid_namespace_rejected(self):
+        self.expect_error(
+            "namespace",
+            **{**REGISTRY_BASE, "NAMESPACE": "Not Valid"},
+        )
 
     def test_invalid_npm_name_rejected(self):
         self.expect_error(

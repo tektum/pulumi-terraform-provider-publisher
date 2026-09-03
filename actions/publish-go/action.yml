@@ -1,0 +1,51 @@
+name: Publish Go SDK artifact
+description: Publish a generated Go SDK to a repository tag using pulumi/publish-go-sdk-action.
+
+inputs:
+  repository:
+    required: true
+  base-ref:
+    default: main
+  path:
+    default: sdk/go
+  version:
+    required: true
+  skip-go-get:
+    default: "false"
+  go-version:
+    default: "1.25"
+
+runs:
+  using: composite
+  steps:
+    - name: Download Go SDK artifact
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      with:
+        name: go-sdk.tar.gz
+        path: go-artifact
+
+    - name: Unpack Go SDK
+      shell: bash
+      run: |
+        set -euo pipefail
+        rm -rf sdk/go
+        mkdir -p sdk/go
+        tar -xzf go-artifact/go.tar.gz -C sdk/go
+        find sdk/go -maxdepth 2 -mindepth 1 -print
+
+    - name: Set up Go
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      with:
+        go-version: ${{ inputs.go-version }}
+        cache: false
+
+    - name: Publish Go SDK
+      uses: pulumi/publish-go-sdk-action@0a153fa3c54227a3c0f7c97a57033ecfe94ab3c2 # v1.2.0
+      with:
+        repository: ${{ inputs.repository }}
+        base-ref: ${{ inputs.base-ref }}
+        source: sdk/go
+        path: ${{ inputs.path }}
+        version: ${{ inputs.version }}
+        additive: "true"
+        skip-go-get: ${{ inputs.skip-go-get }}

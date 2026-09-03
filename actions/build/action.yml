@@ -1,0 +1,84 @@
+name: Build Pulumi SDK artifact
+description: Generate, build, verify, and upload one language SDK in publisher-compatible layout.
+
+inputs:
+  language:
+    description: nodejs, python, go, dotnet, or java
+    required: true
+  version:
+    description: Normalized SDK semver
+    required: true
+  pulumi-version:
+    default: "^3"
+  node-version:
+    default: "20.x"
+  python-version:
+    default: "3.11"
+  go-version:
+    default: "1.25"
+  dotnet-version:
+    default: "8.0.x"
+
+runs:
+  using: composite
+  steps:
+    - name: Download package schema
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      with:
+        name: package-schema
+        path: schema
+
+    - name: Install Pulumi CLI
+      uses: pulumi/actions@8e5e406f4007fca908480587cb9893c07090f58d # v7.0.0
+      with:
+        pulumi-version: ${{ inputs.pulumi-version }}
+
+    - name: Set up Node.js
+      if: inputs.language == 'nodejs'
+      uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      with:
+        node-version: ${{ inputs.node-version }}
+
+    - name: Set up Python
+      if: inputs.language == 'python'
+      uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Set up Go
+      if: inputs.language == 'go'
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      with:
+        go-version: ${{ inputs.go-version }}
+        cache: false
+
+    - name: Set up .NET
+      if: inputs.language == 'dotnet'
+      uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+      with:
+        dotnet-version: ${{ inputs.dotnet-version }}
+
+    - name: Generate SDK
+      shell: bash
+      env:
+        LANGUAGE: ${{ inputs.language }}
+      run: |
+        set -euo pipefail
+        pulumi package gen-sdk schema/schema-patched.json --language "${LANGUAGE}" --out ./sdk
+
+    - name: Build and verify SDK
+      shell: bash
+      env:
+        ACTION_DIR: ${{ github.action_path }}
+        LANGUAGE: ${{ inputs.language }}
+        VERSION: ${{ inputs.version }}
+      run: |
+        "${ACTION_DIR}/../../scripts/build_sdk.sh" "${LANGUAGE}" ./sdk "${VERSION}"
+
+    - name: Upload SDK artifact
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      with:
+        name: ${{ inputs.language }}-sdk.tar.gz
+        path: sdk/${{ inputs.language }}.tar.gz
+        if-no-files-found: error
+        retention-days: 1

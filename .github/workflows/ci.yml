@@ -50,7 +50,7 @@ jobs:
       - name: Run actionlint
         run: |
           set -euo pipefail
-          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
           "$(go env GOPATH)/bin/actionlint" -color
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -60,8 +60,8 @@ jobs:
       - name: Run zizmor
         run: |
           set -euo pipefail
-          python3 -m pip install --quiet zizmor==1.11.0
-          zizmor --persona=pedantic --min-severity=low .github/workflows examples
+          python3 -m pip install --quiet zizmor==1.29.0
+          zizmor --persona=pedantic --min-severity=low .github/workflows action.yml actions examples
 
   smoke:
     name: Generation smoke test

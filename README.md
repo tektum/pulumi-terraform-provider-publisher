@@ -1,31 +1,19 @@
-# pulumi-terraform-provider-publisher
+# Pulumi Terraform Provider Publisher
 
-A reusable GitHub Actions workflow that turns a Terraform provider into published
-Pulumi SDKs for **TypeScript/JavaScript, Python, Go, C#, Java and YAML**.
+Generate and publish parameterized Pulumi SDKs for a Terraform provider to npm,
+PyPI, NuGet, Maven Central, and a Go module repository. YAML packages are generated
+and validated without publishing a YAML artifact.
 
-`pulumi package add terraform-provider` is documented as a *local* SDK generation
-command: it writes an SDK into your project and stops there. This repository adds
-the publication automation around it, so a provider release can fan out to npm,
-PyPI, the Go module proxy, NuGet and Maven Central from one `workflow_call`.
+The repository provides two public surfaces backed by the same scripts and
+composite actions:
 
-## What it does
+1. **Root action:** short, registry-backed, sequential, intended for most users.
+2. **Reusable workflow:** parallel multi-job execution with isolated permissions;
+   required for checked-out-source generation.
 
-1. Checks out the **caller** repository.
-2. Installs the Pulumi CLI.
-3. Extracts the Pulumi package schema from the bridged Terraform provider, either
-   from a registry at an exact pinned version (`mode: registry`) or from a provider
-   binary built by the checked-out commit (`mode: local`).
-4. Pins the SDK version and the language package coordinates into the schema.
-5. Generates and builds one SDK per requested runtime, and verifies each one
-   against the exact layout the publisher consumes.
-6. Publishes npm, PyPI, NuGet and Maven SDKs with
-   [`pulumi/pulumi-package-publisher`](https://github.com/pulumi/pulumi-package-publisher).
-7. Publishes the Go SDK with
-   [`pulumi/publish-go-sdk-action`](https://github.com/pulumi/publish-go-sdk-action).
-8. Generates and **validates** the YAML package. YAML has no publishable artifact,
-   so nothing is uploaded for it.
+## Quick start: registry provider
 
-## Usage
+Copy this workflow into the SDK repository:
 
 ```yaml
 name: Publish Pulumi SDKs
@@ -36,29 +24,82 @@ on:
 
 permissions: {}
 
-concurrency:
-  group: publish-pulumi-sdks-${{ github.ref }}
-  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # required only for Go SDK publication
+    steps:
+      - uses: tektum/pulumi-terraform-provider-publisher@v1.0.0
+        with:
+          terraform-provider: descope/descope
+          # Defaults to github.ref_name, so a v0.3.16 tag publishes 0.3.16.
+          namespace: descope
+          publish: true
 
+          npm-token: ${{ secrets.NPM_TOKEN }}
+          pypi-password: ${{ secrets.PYPI_API_TOKEN }}
+          nuget-publish-key: ${{ secrets.NUGET_PUBLISH_KEY }}
+          maven-username: ${{ secrets.SONATYPE_USERNAME }}
+          maven-password: ${{ secrets.SONATYPE_PASSWORD }}
+          maven-signing-key: ${{ secrets.PGP_PRIVATE_KEY }}
+          maven-signing-password: ${{ secrets.PGP_PASSPHRASE }}
+```
+
+`namespace` defaults to the Terraform registry namespace. For
+`descope/descope`, these coordinates are derived:
+
+| Registry | Derived coordinate |
+| --- | --- |
+| npm | `@descope/pulumi-descope` |
+| PyPI | `descope_pulumi_descope` |
+| NuGet | `Descope.Pulumi.Descope` |
+| Maven | `com.descope.pulumi:descope` |
+| Go | `github.com/<caller-repo>/sdk/go` |
+
+Every coordinate remains explicitly overridable for existing package names.
+
+The full manual-dispatch example is in
+[`examples/registry-mode.yml`](examples/registry-mode.yml).
+
+## Why the root action is registry-only
+
+Composite actions run inside one caller job. They cannot create jobs, define a
+matrix, or narrow permissions between internal phases. Running caller-controlled
+source builds and registry publication in the same job would expose publishing
+credentials and a write-capable token to the build environment.
+
+The root action therefore:
+
+- accepts only a registry provider at an exact version;
+- never runs `build-command`;
+- builds selected languages serially;
+- preserves artifact layout, clean-room npm installation, idempotency checks, and
+  post-publish registry verification;
+- rejects publication on pull-request events.
+
+Use the reusable workflow for local source generation.
+
+## Advanced: exact checked-out source
+
+```yaml
 jobs:
   publish:
     permissions:
-      contents: write # publish-go-sdk-action pushes the Go SDK tag
-    uses: omercnet/pulumi-terraform-provider-publisher/.github/workflows/publish-terraform-provider-sdks.yml@17fc2d900ce87f3463b0f7c89e0c98d8f8cb6d74 # v1
+      contents: write
+    uses: tektum/pulumi-terraform-provider-publisher/.github/workflows/publish.yml@v1.0.0
     with:
-      mode: registry
-      terraform-provider: descope/descope
-      terraform-provider-version: 0.3.16
-      languages: nodejs,python,go,dotnet,java,yaml
+      mode: local
+      provider-binary-path: bin/terraform-provider-descope
+      build-command: go build -o bin/terraform-provider-descope .
+      sdk-version: ${{ github.ref_name }}
+
+      runtime-provider: descope/descope
+      runtime-provider-version: ${{ github.ref_name }}
+
+      namespace: descope
       publish: true
-
-      nodejs-package-name: "@descope/pulumi-descope"
-      python-package-name: descope_pulumi_descope
-      dotnet-root-namespace: Descope.Pulumi
-      java-base-package: com.descope.pulumi
-
       go-sdk-repository: descope/pulumi-descope
-      go-sdk-path: sdk/go
     secrets:
       npm-token: ${{ secrets.NPM_TOKEN }}
       pypi-password: ${{ secrets.PYPI_API_TOKEN }}
@@ -69,291 +110,152 @@ jobs:
       maven-signing-password: ${{ secrets.PGP_PASSPHRASE }}
 ```
 
-Complete, runnable callers:
+The complete example, including pull-request dry runs, is in
+[`examples/local-binary-mode.yml`](examples/local-binary-mode.yml).
 
-- [`examples/registry-mode.yml`](examples/registry-mode.yml) - registry-backed
-  generation, pinned provider version.
-- [`examples/local-binary-mode.yml`](examples/local-binary-mode.yml) - generation
-  from a provider binary built by the checked-out commit.
+### Local-mode trust boundary
 
-Pin `uses:` to a commit SHA. `github.workflow_sha` is how the called workflow
-checks out the matching revision of its helper scripts, so a mutable caller ref
-would also make those scripts mutable.
+`build-command` is executed in the checked-out caller repository. The reusable
+workflow runs it only in credential-free schema and YAML jobs. Package publishing
+happens in separate jobs that never execute caller source.
 
-## Two generation modes
+A schema extracted from a local binary embeds that runner-local path in its
+parameterization value. A published SDK could not resolve that path on another
+machine. Local publication therefore requires `runtime-provider` and
+`runtime-provider-version`; the workflow copies the complete parameterization
+block from a real registry extraction rather than constructing the opaque value.
 
-### `mode: registry`
+## Generated outputs
 
-Resolves the provider through the Terraform/OpenTofu registry protocol.
-`terraform-provider-version` must be an **exact** semver version; ranges, partial
-versions and `latest` are rejected, because a published SDK that cannot be
-reproduced is worse than a failed build.
+For each requested language:
 
-```yaml
-mode: registry
-terraform-provider: descope/descope           # or registry.opentofu.org/descope/descope
-terraform-provider-version: 0.3.16
-```
+- **Node.js:** compiles TypeScript, packs the real npm tarball, installs it in a
+  clean room with lifecycle scripts enabled, and verifies exports plus
+  `pulumi.parameterization` metadata.
+- **Python:** creates a wheel and source distribution under the exact directory
+  consumed by `pulumi/pulumi-package-publisher`.
+- **.NET:** builds the NuGet package under `bin/Debug`.
+- **Java:** validates the Gradle publication project and generated runtime-resource
+  task; publication is performed by the upstream publisher.
+- **Go:** builds the generated module, then publishes it with
+  `pulumi/publish-go-sdk-action`.
+- **YAML:** runs `pulumi package add terraform-provider`, validates `Pulumi.yaml`
+  and the generated parameterization descriptor, and creates no artifact.
 
-### `mode: local`
+The schema is patched before code generation. Post-generation renames are not
+used because they leave imports, plugin descriptors, and build files inconsistent.
 
-Extracts the schema by executing a provider binary inside the caller checkout, so
-the SDK surface describes exactly the checked-out source rather than whatever the
-registry serves.
+## Root action inputs
 
-```yaml
-mode: local
-provider-binary-path: bin/terraform-provider-descope
-build-command: go build -o bin/terraform-provider-descope .
-sdk-version: 0.4.0    # required: nothing in the source tree implies a version
-
-# Required when publish=true: released provider consumers resolve at runtime.
-runtime-provider: descope/descope
-runtime-provider-version: 0.4.0
-```
-
-`provider-binary-path` must be relative to the caller checkout and must not escape
-it. `sdk-version` is required, because a working tree carries no release version.
-
-A local extraction carries a parameter equivalent to
-`{"local":{"path":"./bin/terraform-provider-descope"}}`. Publishing that value
-would create an SDK that installs cleanly, then tries to execute a path that only
-existed on the build runner. Therefore `publish: true` in local mode also requires
-`runtime-provider` and an exact `runtime-provider-version`. The workflow asks
-Pulumi to extract the registry schema and grafts its real parameterization block
-onto the source-derived schema. It never guesses or hand-builds the opaque
-parameter. `publish: false` may omit these inputs for source-only validation.
-
-Supplying registry inputs in local mode (or the reverse) is a hard error rather
-than a silently ignored field.
-
-## Trust boundary: `build-command`
-
-`build-command` is **executed** on the runner, in the caller checkout, before
-schema extraction. It exists because there is no other way to build an arbitrary
-provider from source. Consequences:
-
-- Treat it exactly like any other first-party build script in your repository.
-  Whoever can change the caller workflow can run code in the publish pipeline.
-- It runs in the `schema` and `validate-yaml` jobs, which hold **no publishing
-  secrets**. Secrets are only present in the `publish` and `publish-go` jobs, which
-  never execute it.
-- It is passed through the environment (`CALLER_BUILD_COMMAND`) and run with an
-  explicit `bash -c`, so this workflow never splices it into a larger shell
-  program. That prevents *this repository* from adding an injection point; it does
-  not and cannot sandbox the command itself.
-- Do not build it from a pull-request-controlled expression such as
-  `github.event.pull_request.title`.
-
-Everything else, including provider addresses, versions and package coordinates,
-is validated against strict patterns and passed as explicit argument arrays, never
-interpolated into a shell program.
-
-## Inputs
-
-| input | type | default | description |
-| --- | --- | --- | --- |
-| `mode` | string | *required* | `registry` or `local`. |
-| `terraform-provider` | string | `""` | Registry address. `registry` mode only. |
-| `terraform-provider-version` | string | `""` | Exact provider semver. `registry` mode only. |
-| `provider-binary-path` | string | `""` | Provider binary path in the caller checkout. `local` mode only. |
-| `build-command` | string | `""` | Command run before extraction. `local` mode only. See trust boundary. |
-| `runtime-provider` | string | `""` | Registry address consumers resolve. `local` mode; required to publish. |
-| `runtime-provider-version` | string | `""` | Exact released runtime provider version. `local` mode; required to publish. |
-| `sdk-version` | string | `""` | Version stamped on every SDK. Defaults to `terraform-provider-version`. |
-| `languages` | string | `all` | Subset of `nodejs,python,go,dotnet,java,yaml`, or `all`. |
-| `publish` | boolean | `false` | Publish. Forced off on `pull_request`. |
-| `provider-name` | string | `""` | Override the generated Pulumi package name. |
-| `nodejs-package-name` | string | `""` | npm name. Default `@pulumi/<package>`. |
-| `python-package-name` | string | `""` | PyPI name. Default `pulumi_<package>`. |
-| `go-module-path` | string | derived | Go module path. Derived from `go-sdk-repository`/`go-sdk-path`. |
-| `go-sdk-repository` | string | caller repo | Repository hosting the Go module. |
-| `go-sdk-path` | string | `sdk/go` | Sub-path holding the Go module. |
-| `go-sdk-base-ref` | string | `main` | Parent commit for the Go SDK push. |
-| `go-sdk-skip-go-get` | boolean | `false` | Skip warming `proxy.golang.org`. |
-| `dotnet-root-namespace` | string | `""` | .NET root namespace. Default `Pulumi`. |
-| `java-base-package` | string | `""` | Java base package and Maven groupId. |
-| `maven-publish-repo-url` | string | `""` | Override the Maven repository URL. |
-| `maven-staging-url` | string | `""` | Override the Sonatype staging API URL. |
-| `assert-prerelease` | boolean | `false` | Refuse to publish a non-prerelease version. |
-| `ref` | string | `""` | Caller ref to check out. Defaults to the triggering SHA. |
-| `runs-on` | string | `ubuntu-latest` | Runner label. |
-| `pulumi-version` | string | `^3` | Pulumi CLI constraint. |
-| `pulumictl-version` | string | `v0.0.50` | pulumictl version used by the publisher. |
-| `node-version` | string | `20.x` | |
-| `python-version` | string | `3.11` | |
-| `go-version` | string | `1.25` | |
-| `dotnet-version` | string | `8.0.x` | |
-| `java-version` | string | `11` | |
-
-### Secrets
-
-| secret | needed for | maps to |
+| Input | Default | Meaning |
 | --- | --- | --- |
-| `npm-token` | npm | `NODE_AUTH_TOKEN` |
-| `pypi-username` | PyPI | `PYPI_USERNAME`, defaults to `__token__` |
-| `pypi-password` | PyPI | `PYPI_PASSWORD` |
-| `nuget-publish-key` | NuGet | `NUGET_PUBLISH_KEY` |
-| `maven-username` | Maven Central | `PUBLISH_REPO_USERNAME` |
-| `maven-password` | Maven Central | `PUBLISH_REPO_PASSWORD` |
-| `maven-signing-key` | Maven Central | `SIGNING_KEY` (ASCII-armored PGP key) |
-| `maven-signing-password` | Maven Central | `SIGNING_PASSWORD` |
+| `terraform-provider` | required | Registry address such as `descope/descope`. |
+| `terraform-provider-version` | triggering tag | Exact provider semver. |
+| `namespace` | registry namespace | Derives language package coordinates. |
+| `languages` | `all` | `nodejs,python,go,dotnet,java,yaml` subset. |
+| `publish` | `false` | Publish after generation and validation. |
+| `provider-name` | provider name | Pulumi package name override. |
+| `nodejs-package-name` | derived | npm override. |
+| `python-package-name` | derived | PyPI override. |
+| `dotnet-root-namespace` | derived | .NET namespace override. |
+| `java-base-package` | derived | Java package/Maven group override. |
+| `go-sdk-repository` | caller repo | Repository receiving the Go SDK tag. |
+| `go-sdk-path` | `sdk/go` | Go module path within that repository. |
+| `assert-prerelease` | `false` | Reject stable versions. |
 
-Only pass the secrets for the languages you publish. A language whose secret is
-absent fails in its own publisher step, not before.
+Toolchain inputs are available for pinned environments: `pulumi-version`,
+`pulumictl-version`, `node-version`, `python-version`, `go-version`,
+`dotnet-version`, and `java-version`.
 
-### Outputs
+Registry credentials are action inputs named `npm-token`, `pypi-username`,
+`pypi-password`, `nuget-publish-key`, `maven-username`, `maven-password`,
+`maven-signing-key`, and `maven-signing-password`. Pass only credentials for the
+selected languages.
 
-| output | description |
-| --- | --- |
-| `version` | Normalized semver version stamped on every SDK. |
-| `package-name` | Generated Pulumi package name. |
-| `published` | Comma separated languages actually published by this run. |
+The reusable workflow accepts the same registry inputs plus `mode`,
+`provider-binary-path`, `build-command`, `runtime-provider`,
+`runtime-provider-version`, `sdk-version`, `ref`, and `runs-on`. Its credentials
+are typed `workflow_call` secrets with the same names.
 
-## Package coordinates
+## Versioning and updates
 
-Generated defaults are `@pulumi/<package>`, `pulumi_<package>`,
-`Pulumi.<Package>`, and a Go import path under
-`github.com/pulumi/pulumi-terraform-provider/...`. Those are correct for packages
-Pulumi publishes and wrong for everybody else, so all of them are overridable.
+Production examples use immutable semantic release tags such as `v1.0.0`. Enable
+Dependabot or Renovate for reviewed publisher updates:
 
-Coordinates are applied by rewriting the package schema **before** generation.
-That is the only safe place: rewriting generated sources afterwards leaves import
-paths, plugin descriptors and build files disagreeing with each other.
+```yaml
+# .github/dependabot.yml
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+```
 
-The Go module path is not freely settable. `go get` requires the module path to
-match where the code is hosted, so it is derived as
-`github.com/<go-sdk-repository>/<go-sdk-path>`. Passing a `go-module-path` that
-contradicts that is rejected instead of producing an unimportable SDK.
+For maximum content-addressing assurance, replace `@v1.0.0` with that release's
+full commit SHA and retain a same-line `# v1.0.0` comment. Do not use a moving
+`@v1` tag for a workflow that receives package-registry credentials unless that
+mutable trust model is intentional.
 
-### Known limitation: cross-repository Go publication
-
-`pulumi/publish-go-sdk-action` checks out and pushes with the job's
-`GITHUB_TOKEN`, which it does not expose as an input. `go-sdk-repository` must
-therefore be a repository the caller's `GITHUB_TOKEN` can write, and the caller
-must grant `permissions: contents: write`. Publishing the Go SDK to an unrelated
-repository is not supported; no personal-access-token knob is offered here,
-because there is no supported way to feed one to that action.
-
-## Parameterization metadata
-
-A bridged Terraform provider is a *parameterized* Pulumi package: the SDK carries
-`pulumi.parameterization` metadata (base provider name, base provider version and
-an opaque base64 parameter) that lets it resolve the real provider at runtime.
-Strip it and the package installs cleanly and then fails at `pulumi up`.
-
-The schema patcher never edits parameterization fields piecemeal. Registry mode
-preserves the extracted block verbatim. Local publication replaces the complete
-local-path block with a complete block taken from a second, real registry schema
-extraction. It refuses schemas without parameterization metadata, and
-`scripts/verify_layout.py` re-asserts its presence in every built SDK:
-`bin/package.json` for npm, `pulumi-plugin.json` for Python, Go and .NET, and the
-`genPulumiResources` task for Java.
-
-## Idempotency
-
-Published versions are immutable, so re-running a release must be a no-op rather
-than a failure:
-
-- `scripts/check_published.py` queries npm, PyPI, NuGet and Maven Central over
-  their public read APIs and removes already-published languages from the
-  publisher's `sdk` list. `npm publish` is the reason this exists: unlike twine's
-  `--skip-existing` and `dotnet nuget push --skip-duplicate`, it hard-fails on a
-  duplicate version and takes the whole job with it.
-- Before publication, required credentials are checked per selected language so a
-  missing secret fails with its `workflow_call` name rather than a registry error.
-- After publication, `scripts/verify_published.py` polls every selected registry
-  until the immutable version is readable. This is essential for Java because the
-  upstream publisher marks its Maven step `continue-on-error`; composite-action
-  success alone is not proof that Maven Central accepted the release.
-- A registry that cannot be reached is treated as "not published" before a release,
-  so an outage cannot silently skip a real publication; after publication it is
-  retried and eventually fails the job.
-- `pulumi/publish-go-sdk-action` already checks whether the tag exists.
-
-## npm packaging check
-
-`npm publish` uploads exactly what `npm pack` produces. A package can compile and
-still be unusable, because the `files` allowlist omits something a lifecycle
-script or an import needs. That is how one published provider SDK shipped a
-`postinstall` hook whose `scripts/` directory had been excluded: every consumer's
-`npm install` failed.
-
-`scripts/verify_npm_install.sh` therefore packs the real tarball, asserts the
-compiled entrypoint and manifest are inside it, installs it into an empty project
-**with lifecycle scripts enabled**, and `require()`s it to confirm the exports and
-the parameterization metadata survived. `scripts/verify_layout.py` additionally
-rejects any lifecycle script whose target file is missing from the package or
-excluded by `files`.
-
-## YAML is validation only
-
-The YAML runtime has no SDK to compile and no artifact to publish. `pulumi package
-add` records the package in `Pulumi.yaml` and writes
-`sdks/<name>/<name>-<version>.yaml`. The workflow asserts that the `packages:`
-block names the package, points at `terraform-provider`, records the pinned
-provider version in `parameters:`, and that the generated descriptor carries a
-complete `parameterization` block. Nothing is uploaded, and the smoke test asserts
-no YAML artifact is produced.
-
-## Security posture
+## Security properties
 
 - Every third-party action is pinned to an immutable commit SHA.
-- `permissions: {}` at the workflow level; each job opts in to the minimum. Only
-  `publish-go` gets `contents: write`.
-- `persist-credentials: false` on every checkout.
-- No dependency caching in a workflow that holds publishing credentials.
-- Untrusted inputs are never interpolated into shell programs: they are validated
-  against strict patterns, passed through the environment, and expanded into
-  explicit argument arrays. `build-command` is the single documented exception.
-- Publication is blocked on `pull_request` events regardless of `publish`.
-- `assert-prerelease` makes an accidental stable publish from a non-release branch
-  impossible.
+- Workflow-level permissions are empty; jobs opt into the minimum.
+- Only Go publication receives `contents: write`.
+- Every checkout disables persisted credentials.
+- Caller build code never shares a job with package-registry credentials.
+- Provider addresses, versions, package coordinates, paths, and language lists are
+  validated before shell execution.
+- Publication is disabled on pull-request events.
+- Published immutable versions are checked before publication and read back from
+  each registry afterwards.
+- The reusable workflow uses GitHub's `$/` self-repository action syntax, so the
+  composites and scripts resolve from the same revision selected by the caller.
 
-`actionlint`, `shellcheck` and `zizmor --persona=pedantic --min-severity=low` run
-in CI and are treated as blocking. The only suppression is one narrowly scoped
-`shellcheck` disable for JavaScript template literals inside a single-quoted node
-program, annotated in place.
+`$/` requires GitHub-hosted runners version 2.336.0 or newer and is not supported
+on GitHub Enterprise Server. GHES consumers must use a release that retains the
+checkout-based compatibility implementation.
 
-`pulumi-package-publisher` also exposes an `assertPrerelease` input. It is not
-used: its implementation is `if [[ ... ]] then`, which is a bash syntax error, so
-the check is performed here instead.
+### Go repository limitation
 
-## Repository layout
+`pulumi/publish-go-sdk-action` does not expose a token input. It pushes with the
+caller's `GITHUB_TOKEN`, so `go-sdk-repository` must be writable by that token.
+Cross-repository Go publication is unsupported unless GitHub grants that token
+write access.
 
+## Architecture
+
+```text
+action.yml                         registry-only convenience facade
+actions/validate/action.yml        shared input contract
+actions/schema/action.yml          schema extraction and coordinate patching
+actions/build/action.yml           per-language generation and packaging
+actions/validate-yaml/action.yml   YAML-only validation
+actions/publish/action.yml         npm/PyPI/NuGet/Maven publication
+actions/publish-go/action.yml      Go publication
+.github/workflows/publish.yml      isolated parallel reusable workflow
+scripts/                           behavior and invariant checks
+tests/                             focused tests and live smoke tests
 ```
-.github/workflows/publish-terraform-provider-sdks.yml   the reusable workflow
-.github/workflows/ci.yml                                unit tests, linters, smoke test
-.github/workflows/self-test.yml                         real workflow_call dry run
-scripts/validate_inputs.py                              input validation and normalization
-scripts/patch_schema.py                                 version and coordinate pinning
-scripts/verify_published.py                             post-publish registry read-back
-scripts/build_sdk.sh                                    per-language build into publisher layout
-scripts/verify_layout.py                                publisher layout and parameterization asserts
-scripts/verify_npm_install.sh                            npm pack plus clean-room install
-scripts/check_published.py                              registry idempotency filter
-scripts/validate_yaml_package.py                        YAML package validation
-scripts/pep440_version.py                               semver to PEP 440
-tests/                                                  unit tests and the end-to-end smoke test
-examples/                                               runnable caller workflows
-```
 
-## Local development
+Both public surfaces call the same composites and scripts. There is no second SDK
+generation or publication implementation.
+
+## Development
 
 ```bash
 python3 -m unittest discover -s tests -p 'test_*.py' -v
-
-# End-to-end: generate, build and validate against a real provider.
-tests/smoke_test.sh descope/descope 0.3.16
-
-# Builds a real Terraform provider from source, extracts the local schema, grafts
-# registry parameterization, and proves the SDK has no machine-local path.
-tests/smoke_test_local.sh
-
-actionlint
 shellcheck scripts/*.sh tests/*.sh
-zizmor --persona=pedantic --min-severity=low .github/workflows examples
+actionlint
+zizmor --persona=pedantic --min-severity=low \
+  .github/workflows action.yml actions examples
+
+tests/smoke_test.sh descope/descope 0.3.16
+tests/smoke_test_local.sh
 ```
+
+CI additionally executes the real reusable workflow and root action in dry-run
+mode, including Node.js, Python, Go, .NET, Java, YAML, and npm clean-room install.
 
 ## License
 

@@ -50,7 +50,7 @@ if MODE=local \
    SDK_VERSION="${SDK_VERSION}" \
    LANGUAGES=nodejs \
    PUBLISH=true \
-   GO_SDK_REPOSITORY=omercnet/pulumi-smoke-descope \
+   GO_SDK_REPOSITORY=tektum/pulumi-smoke-descope \
      python3 "${REPO_ROOT}/scripts/validate_inputs.py" >/dev/null 2>&1; then
   fail "publish=true without runtime-provider must be rejected"
 fi
@@ -63,7 +63,7 @@ LANGUAGES=nodejs \
 PUBLISH=true \
 RUNTIME_PROVIDER="${RUNTIME_PROVIDER}" \
 RUNTIME_PROVIDER_VERSION="${RUNTIME_VERSION}" \
-GO_SDK_REPOSITORY=omercnet/pulumi-smoke-descope \
+GO_SDK_REPOSITORY=tektum/pulumi-smoke-descope \
   python3 "${REPO_ROOT}/scripts/validate_inputs.py" >/dev/null
 echo "accepted with runtime-provider ${RUNTIME_PROVIDER}@${RUNTIME_VERSION}"
 

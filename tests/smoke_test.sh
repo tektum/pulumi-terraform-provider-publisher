@@ -40,7 +40,7 @@ export PULUMI_SKIP_UPDATE_CHECK=true
 # fallback to the default names fails the test.
 NODEJS_PACKAGE_NAME="@smoke/pulumi-smoke-descope"
 PYTHON_PACKAGE_NAME="smoke_pulumi_descope"
-GO_MODULE_PATH="github.com/omercnet/pulumi-smoke-descope/sdk/go"
+GO_MODULE_PATH="github.com/tektum/pulumi-smoke-descope/sdk/go"
 DOTNET_ROOT_NAMESPACE="Smoke.Pulumi"
 JAVA_BASE_PACKAGE="com.smoke.pulumi"
 
@@ -54,7 +54,7 @@ TF_PROVIDER_VERSION="${PROVIDER_VERSION}" \
 SDK_VERSION="${PROVIDER_VERSION}" \
 LANGUAGES="all" \
 PUBLISH=false \
-GO_SDK_REPOSITORY="omercnet/pulumi-smoke-descope" \
+GO_SDK_REPOSITORY="tektum/pulumi-smoke-descope" \
 GO_SDK_PATH="sdk/go" \
 NODEJS_PACKAGE_NAME="${NODEJS_PACKAGE_NAME}" \
 PYTHON_PACKAGE_NAME="${PYTHON_PACKAGE_NAME}" \

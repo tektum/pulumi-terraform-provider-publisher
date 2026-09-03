@@ -1,0 +1,158 @@
+name: Extract and patch provider schema
+description: Extract a parameterized Terraform-provider schema and upload the pinned package schema.
+
+inputs:
+  mode:
+    required: true
+  terraform-provider:
+  terraform-provider-version:
+  provider-binary-path:
+  build-command:
+  runtime-provider:
+  runtime-provider-version:
+  needs-runtime-graft:
+    default: "false"
+  provider-name:
+  version:
+    required: true
+  nodejs-package-name:
+  python-package-name:
+  go-module-path:
+  dotnet-root-namespace:
+  java-base-package:
+  checkout-caller:
+    description: Check out the caller repository before extraction
+    default: "true"
+  caller-ref:
+  pulumi-version:
+    default: "^3"
+  go-version:
+    default: "1.25"
+
+outputs:
+  package-name:
+    value: ${{ steps.coordinates.outputs.package-name }}
+
+runs:
+  using: composite
+  steps:
+    - name: Checkout caller repository
+      if: inputs.checkout-caller == 'true'
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        repository: ${{ github.repository }}
+        ref: ${{ inputs.caller-ref || github.sha }}
+        path: caller
+        persist-credentials: false
+
+    - name: Install Pulumi CLI
+      uses: pulumi/actions@8e5e406f4007fca908480587cb9893c07090f58d # v7.0.0
+      with:
+        pulumi-version: ${{ inputs.pulumi-version }}
+
+    - name: Set up Go
+      if: inputs.mode == 'local'
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      with:
+        go-version: ${{ inputs.go-version }}
+        cache: false
+
+    - name: Run caller build command
+      if: inputs.mode == 'local' && inputs.build-command != ''
+      shell: bash
+      working-directory: caller
+      env:
+        CALLER_BUILD_COMMAND: ${{ inputs.build-command }}
+      run: |
+        set -euo pipefail
+        echo "::group::caller build command"
+        printf '%s\n' "${CALLER_BUILD_COMMAND}"
+        echo "::endgroup::"
+        bash -euo pipefail -c "${CALLER_BUILD_COMMAND}"
+
+    - name: Extract package schema
+      shell: bash
+      env:
+        MODE: ${{ inputs.mode }}
+        TF_PROVIDER: ${{ inputs.terraform-provider }}
+        TF_PROVIDER_VERSION: ${{ inputs.terraform-provider-version }}
+        PROVIDER_BINARY_PATH: ${{ inputs.provider-binary-path }}
+        PROVIDER_NAME: ${{ inputs.provider-name }}
+        CHECKOUT_CALLER: ${{ inputs.checkout-caller }}
+      run: |
+        set -euo pipefail
+        workdir="."
+        if [[ "${CHECKOUT_CALLER}" == "true" ]]; then
+          workdir="caller"
+        fi
+        cd "${workdir}"
+
+        args=()
+        if [[ "${MODE}" == "registry" ]]; then
+          args+=("${TF_PROVIDER}" "${TF_PROVIDER_VERSION}")
+        else
+          target="${PROVIDER_BINARY_PATH}"
+          if [[ ! -e "${target}" ]]; then
+            echo "::error title=Provider binary not found::${target} does not exist after build-command." >&2
+            exit 1
+          fi
+          [[ "${target}" == ./* || "${target}" == /* ]] || target="./${target}"
+          args+=("${target}")
+        fi
+        if [[ -n "${PROVIDER_NAME}" ]]; then
+          args+=(--provider-name "${PROVIDER_NAME}")
+        fi
+        pulumi package get-schema terraform-provider -- "${args[@]}" > "${RUNNER_TEMP}/schema.json"
+        wc -c "${RUNNER_TEMP}/schema.json"
+
+    - name: Extract runtime parameterization schema
+      if: inputs.needs-runtime-graft == 'true'
+      shell: bash
+      env:
+        RUNTIME_PROVIDER: ${{ inputs.runtime-provider }}
+        RUNTIME_PROVIDER_VERSION: ${{ inputs.runtime-provider-version }}
+      run: |
+        set -euo pipefail
+        pulumi package get-schema terraform-provider \
+          -- "${RUNTIME_PROVIDER}" "${RUNTIME_PROVIDER_VERSION}" \
+          > "${RUNNER_TEMP}/runtime-schema.json"
+
+    - name: Pin version and package coordinates
+      id: coordinates
+      shell: bash
+      env:
+        ACTION_DIR: ${{ github.action_path }}
+        VERSION: ${{ inputs.version }}
+        NODEJS_PACKAGE_NAME: ${{ inputs.nodejs-package-name }}
+        PYTHON_PACKAGE_NAME: ${{ inputs.python-package-name }}
+        GO_MODULE_PATH: ${{ inputs.go-module-path }}
+        DOTNET_ROOT_NAMESPACE: ${{ inputs.dotnet-root-namespace }}
+        JAVA_BASE_PACKAGE: ${{ inputs.java-base-package }}
+        RUNTIME_GRAFT: ${{ inputs.needs-runtime-graft }}
+      run: |
+        set -euo pipefail
+        args=(
+          --schema "${RUNNER_TEMP}/schema.json"
+          --out "${RUNNER_TEMP}/schema-patched.json"
+          --coordinates-out "${RUNNER_TEMP}/coordinates.json"
+          --version "${VERSION}"
+          --nodejs-package-name "${NODEJS_PACKAGE_NAME}"
+          --python-package-name "${PYTHON_PACKAGE_NAME}"
+          --go-module-path "${GO_MODULE_PATH}"
+          --dotnet-root-namespace "${DOTNET_ROOT_NAMESPACE}"
+          --java-base-package "${JAVA_BASE_PACKAGE}"
+        )
+        if [[ "${RUNTIME_GRAFT}" == "true" ]]; then
+          args+=(--runtime-parameterization "${RUNNER_TEMP}/runtime-schema.json")
+        fi
+        python3 "${ACTION_DIR}/../../scripts/patch_schema.py" "${args[@]}"
+
+    - name: Upload schema
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      with:
+        name: package-schema
+        path: |
+          ${{ runner.temp }}/schema-patched.json
+          ${{ runner.temp }}/coordinates.json
+        if-no-files-found: error
+        retention-days: 1
