@@ -5,25 +5,38 @@ inputs:
   mode:
     required: true
   terraform-provider:
+    required: false
   terraform-provider-version:
+    required: false
   provider-binary-path:
+    required: false
   build-command:
+    required: false
   runtime-provider:
+    required: false
   runtime-provider-version:
+    required: false
   needs-runtime-graft:
     default: "false"
   provider-name:
+    required: false
   version:
     required: true
   nodejs-package-name:
+    required: false
   python-package-name:
+    required: false
   go-module-path:
+    required: false
   dotnet-root-namespace:
+    required: false
   java-base-package:
+    required: false
   checkout-caller:
     description: Check out the caller repository before extraction
     default: "true"
   caller-ref:
+    required: false
   pulumi-version:
     default: "^3"
   go-version:

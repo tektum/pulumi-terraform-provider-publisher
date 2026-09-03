@@ -8,16 +8,25 @@ inputs:
   version:
     required: true
   npm-token:
+    required: false
   pypi-username:
     default: __token__
   pypi-password:
+    required: false
   nuget-publish-key:
+    required: false
   maven-username:
+    required: false
   maven-password:
+    required: false
   maven-signing-key:
+    required: false
   maven-signing-password:
+    required: false
   maven-publish-repo-url:
+    required: false
   maven-staging-url:
+    required: false
   pulumi-version:
     default: "^3"
   pulumictl-version:

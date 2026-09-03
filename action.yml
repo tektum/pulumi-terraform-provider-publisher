@@ -49,11 +49,17 @@ inputs:
   nuget-publish-key:
     description: nuget.org API key when dotnet publishing is selected
   maven-username:
+    required: false
   maven-password:
+    required: false
   maven-signing-key:
+    required: false
   maven-signing-password:
+    required: false
   maven-publish-repo-url:
+    required: false
   maven-staging-url:
+    required: false
   assert-prerelease:
     default: "false"
   pulumi-version:

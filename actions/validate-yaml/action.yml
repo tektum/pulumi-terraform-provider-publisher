@@ -5,13 +5,19 @@ inputs:
   mode:
     required: true
   terraform-provider:
+    required: false
   terraform-provider-version:
+    required: false
   provider-binary-path:
+    required: false
   build-command:
+    required: false
   provider-name:
+    required: false
   package-name:
     required: true
   caller-ref:
+    required: false
   checkout-caller:
     default: "true"
   pulumi-version:
